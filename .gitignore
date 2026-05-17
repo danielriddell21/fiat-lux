@@ -1,0 +1,27 @@
+# Binaries
+/fiatlux
+/bin/
+/dist/
+
+# Test & coverage artefacts
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Local databases & saves
+*.db
+*.sqlite
+*.sqlite-journal
+runs/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Env
+.env
+.env.local

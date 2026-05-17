@@ -1,0 +1,24 @@
+# Fully-local setup. Requires a running Ollama instance with
+# qwen3:8b pulled:
+#
+#   ollama pull qwen3:8b
+#   ollama serve
+#
+# Run:
+#   fiatlux run --config examples/local-qwen.yaml
+
+worlds:
+  - name: kosmos
+    agent:
+      name: the creator
+      system_prompt: |
+        You exist. The world is empty. You have tools to create.
+        What you make is entirely your choice. Be brief - issue at most
+        one tool call per turn with a short justification.
+      brain:
+        provider: ollama
+        model: qwen3:8b
+
+reflect_interval: 20
+max_agents: 8
+max_spawn_depth: 3
