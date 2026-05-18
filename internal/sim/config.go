@@ -1,0 +1,147 @@
+package sim
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/danielriddell21/fiat-lux/internal/memory"
+	"github.com/danielriddell21/fiat-lux/internal/world"
+)
+
+// Config is the YAML-deserialised multi-world configuration. The
+// production form lives in examples/cloud-haiku.yaml and
+// examples/local-qwen.yaml.
+type Config struct {
+	Worlds          []WorldConfig `yaml:"worlds"`
+	ReflectInterval uint64        `yaml:"reflect_interval,omitempty"`
+	MaxAgents       int           `yaml:"max_agents,omitempty"`
+	MaxSpawnDepth   int           `yaml:"max_spawn_depth,omitempty"`
+}
+
+// WorldConfig is one world's spec.
+type WorldConfig struct {
+	Name  string      `yaml:"name"`
+	Agent AgentConfig `yaml:"agent"`
+}
+
+// AgentConfig is the root agent's spec for a world.
+type AgentConfig struct {
+	Name         string      `yaml:"name,omitempty"`
+	SystemPrompt string      `yaml:"system_prompt,omitempty"`
+	Brain        BrainConfig `yaml:"brain"`
+}
+
+// BrainConfig captures provider + model. Spec is an alternative
+// form: a full string like "anthropic:claude-haiku-4-5".
+type BrainConfig struct {
+	Spec     string `yaml:"spec,omitempty"`
+	Provider string `yaml:"provider,omitempty"`
+	Model    string `yaml:"model,omitempty"`
+}
+
+// resolveSpec returns the brain spec string used by BrainFactory.
+func (b BrainConfig) resolveSpec() string {
+	if b.Spec != "" {
+		return b.Spec
+	}
+	if b.Provider == "" {
+		return "stub"
+	}
+	if b.Model == "" {
+		return b.Provider
+	}
+	return b.Provider + ":" + b.Model
+}
+
+// LoadYAML parses a Config from the reader.
+func LoadYAML(r io.Reader) (*Config, error) {
+	buf, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("sim: read config: %w", err)
+	}
+	var c Config
+	if err := yaml.Unmarshal(buf, &c); err != nil {
+		return nil, fmt.Errorf("sim: parse yaml: %w", err)
+	}
+	if err := c.Validate(); err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// Validate checks that the config is internally consistent before
+// the universe is built.
+func (c *Config) Validate() error {
+	if len(c.Worlds) == 0 {
+		return errors.New("sim: config has no worlds")
+	}
+	seen := map[string]struct{}{}
+	for i, w := range c.Worlds {
+		if w.Name == "" {
+			return fmt.Errorf("sim: worlds[%d] has empty name", i)
+		}
+		if _, dup := seen[w.Name]; dup {
+			return fmt.Errorf("sim: duplicate world name %q", w.Name)
+		}
+		seen[w.Name] = struct{}{}
+		if w.Agent.Brain.resolveSpec() == "" {
+			return fmt.Errorf("sim: world %q has no agent.brain spec", w.Name)
+		}
+	}
+	return nil
+}
+
+// BuildUniverse turns a Config into a Universe by constructing one
+// Sim per world. The embedder is shared so all worlds use the same
+// embedding pipeline.
+func (c *Config) BuildUniverse(
+	ctx context.Context,
+	factory BrainFactory,
+	embedder memory.Embedder,
+) (*Universe, error) {
+	if factory == nil {
+		return nil, errors.New("sim: BuildUniverse requires a BrainFactory")
+	}
+	sims := make([]*Sim, 0, len(c.Worlds))
+	for _, wc := range c.Worlds {
+		w, err := world.New(wc.Name)
+		if err != nil {
+			closeAll(sims)
+			return nil, fmt.Errorf("sim: world %q: %w", wc.Name, err)
+		}
+		spec := wc.Agent.Brain.resolveSpec()
+		br, err := factory(ctx, spec)
+		if err != nil {
+			closeAll(sims)
+			return nil, fmt.Errorf("sim: world %q brain %q: %w", wc.Name, spec, err)
+		}
+		s, err := New(Options{
+			World:           w,
+			Brain:           br,
+			Embedder:        embedder,
+			ReflectInterval: c.ReflectInterval,
+			BrainFactory:    factory,
+			MaxAgents:       c.MaxAgents,
+			MaxSpawnDepth:   c.MaxSpawnDepth,
+			AgentName:       wc.Agent.Name,
+			SystemPrompt:    wc.Agent.SystemPrompt,
+		})
+		if err != nil {
+			_ = br.Close()
+			closeAll(sims)
+			return nil, fmt.Errorf("sim: world %q: %w", wc.Name, err)
+		}
+		sims = append(sims, s)
+	}
+	return NewUniverse(sims)
+}
+
+func closeAll(sims []*Sim) {
+	for _, s := range sims {
+		_ = s.Close()
+	}
+}
