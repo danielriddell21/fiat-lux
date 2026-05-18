@@ -25,9 +25,10 @@ type Styles struct {
 	EventTarget lg.Style
 	EventCasc   lg.Style
 
-	Reasoning lg.Style
-	HelpKey   lg.Style
-	HelpDesc  lg.Style
+	Reasoning  lg.Style
+	Reflection lg.Style
+	HelpKey    lg.Style
+	HelpDesc   lg.Style
 
 	Faint lg.Style
 }
@@ -62,9 +63,10 @@ func DefaultStyles() Styles {
 		EventTarget: lg.NewStyle().Foreground(lg.Color("252")),
 		EventCasc:   lg.NewStyle().Foreground(warn).Italic(true),
 
-		Reasoning: lg.NewStyle().Foreground(lg.Color("250")),
-		HelpKey:   lg.NewStyle().Foreground(highlight).Bold(true),
-		HelpDesc:  lg.NewStyle().Foreground(lg.Color("252")),
+		Reasoning:  lg.NewStyle().Foreground(lg.Color("250")),
+		Reflection: lg.NewStyle().Foreground(lg.Color("228")).Bold(true).Italic(true),
+		HelpKey:    lg.NewStyle().Foreground(highlight).Bold(true),
+		HelpDesc:   lg.NewStyle().Foreground(lg.Color("252")),
 
 		Faint: lg.NewStyle().Foreground(dim),
 	}
