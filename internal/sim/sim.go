@@ -1,0 +1,618 @@
+package sim
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+
+	"github.com/danielriddell21/fiat-lux/internal/agent"
+	"github.com/danielriddell21/fiat-lux/internal/brain"
+	"github.com/danielriddell21/fiat-lux/internal/memory"
+	"github.com/danielriddell21/fiat-lux/internal/tools"
+	"github.com/danielriddell21/fiat-lux/internal/world"
+)
+
+// ErrNoBrain is returned when Step is called and there is no agent
+// with a brain attached.
+var ErrNoBrain = errors.New("sim: no agent has a brain")
+
+// ErrAgentCap is returned when SpawnAgent would push the world
+// past Options.MaxAgents.
+var ErrAgentCap = errors.New("sim: max agents per world reached")
+
+// ErrSpawnDepth is returned when SpawnAgent would push the spawn
+// graph past Options.MaxSpawnDepth.
+var ErrSpawnDepth = errors.New("sim: max spawn depth reached")
+
+// BrainFactory constructs a Brain from an agent-supplied spec
+// string. The cmd/fiatlux package supplies one that understands
+// stub/anthropic/openai/ollama/openaicompat configs; tests can
+// provide a simpler one. Returning nil with a nil error rejects
+// the spec; the spawn is refused.
+type BrainFactory func(ctx context.Context, spec string) (brain.Brain, error)
+
+// Sim is the multi-agent orchestrator. It holds one world and N
+// agents; Step picks the next agent round-robin and advances the
+// world tick when the cycle wraps.
+type Sim struct {
+	mu sync.Mutex
+
+	World *world.World
+
+	// agents is ordered; nextIdx points at the agent that will act
+	// on the next Step call. Insertion order is stable so focus
+	// cycling in the TUI matches spawn order.
+	agents     []*agent.Agent
+	nextIdx    int
+	perAgentRT map[world.EntityID]*agentRuntime
+
+	Observer func(StepResult)
+
+	// brainFactory is consulted by SpawnAgent calls to construct a
+	// child agent's brain from its spec string. Nil disables
+	// SpawnAgent (it returns an explanatory error to the agent).
+	brainFactory BrainFactory
+
+	// Defaults inherited by spawned agents when their SpawnAgent
+	// call doesn't override them.
+	defaultEmbedder        memory.Embedder
+	defaultImportance      memory.Importance
+	defaultReflectInterval uint64
+	defaultSystemPrompt    string
+	tools                  *tools.Registry
+
+	// Safety knobs.
+	maxAgents     int
+	maxSpawnDepth int
+
+	// Per-world write serialisation lives on world.World already
+	// (per-world RWMutex); spawn-time bookkeeping is serialised
+	// here on Sim.mu.
+}
+
+// agentRuntime holds the per-agent state the sim tracks alongside
+// the agent itself.
+type agentRuntime struct {
+	lastIdle  bool
+	reflector *memory.Reflector
+	// spawnedBy holds the EntityID of the parent agent, used by
+	// SpawnAgent depth checks. Zero for the root creator.
+	spawnedBy world.EntityID
+}
+
+// StepResult is a structured summary of one Step.
+type StepResult struct {
+	Tick        world.Tick
+	Skipped     bool
+	AgentID     world.EntityID
+	AgentName   string
+	Thought     string
+	ToolName    string
+	ToolResult  string
+	ToolErr     error
+	Usage       brain.TokenUsage
+	Reflections []string
+}
+
+// Options configures a new Sim.
+type Options struct {
+	// World is required.
+	World *world.World
+
+	// Brain is required: the root agent's brain.
+	Brain brain.Brain
+
+	// Tools defaults to tools.Default() when nil.
+	Tools *tools.Registry
+
+	// AgentName is the spawn-time display name of the root agent.
+	// Defaults to "the creator".
+	AgentName string
+
+	// SystemPrompt is the static instruction prepended to every
+	// brain call. Defaults to the canonical fiat-lux prompt.
+	SystemPrompt string
+
+	// Memory, when non-nil, is the root agent's memory stream.
+	// Each spawned agent always gets its own fresh stream.
+	Memory *memory.Stream
+
+	// Embedder, Importance: defaults inherited by spawned agents.
+	Embedder   memory.Embedder
+	Importance memory.Importance
+
+	// ReflectInterval triggers a reflection pass every N ticks.
+	// Inherited by spawned agents.
+	ReflectInterval uint64
+
+	// BrainFactory is invoked by SpawnAgent to build a child's
+	// brain from its agent-supplied config string. Nil disables
+	// SpawnAgent.
+	BrainFactory BrainFactory
+
+	// MaxAgents caps total agents per world; 0 means 8 (a safe
+	// default).
+	MaxAgents int
+
+	// MaxSpawnDepth caps the spawn graph height; 0 means 3.
+	MaxSpawnDepth int
+
+	// Observer is an optional hook called with each StepResult.
+	Observer func(StepResult)
+}
+
+// DefaultSystemPrompt is the canonical instruction passed to the
+// root creator.
+const DefaultSystemPrompt = `You exist. The world is empty. You have tools to create. ` +
+	`What you make is entirely your choice. Be brief - issue at most one tool ` +
+	`call per turn with a short justification. Below is what currently exists ` +
+	`and what you remember.`
+
+// New constructs a Sim, spawning the root creator as an entity in
+// the world and attaching it to the given brain.
+func New(opts Options) (*Sim, error) {
+	if opts.World == nil {
+		return nil, errors.New("sim: World is required")
+	}
+	if opts.Brain == nil {
+		return nil, ErrNoBrain
+	}
+	reg := opts.Tools
+	if reg == nil {
+		reg = tools.Default()
+	}
+	name := opts.AgentName
+	if name == "" {
+		name = "the creator"
+	}
+	prompt := opts.SystemPrompt
+	if prompt == "" {
+		prompt = DefaultSystemPrompt
+	}
+	maxAgents := opts.MaxAgents
+	if maxAgents <= 0 {
+		maxAgents = 8
+	}
+	maxDepth := opts.MaxSpawnDepth
+	if maxDepth <= 0 {
+		maxDepth = 3
+	}
+
+	s := &Sim{
+		World:                  opts.World,
+		Observer:               opts.Observer,
+		brainFactory:           opts.BrainFactory,
+		defaultEmbedder:        opts.Embedder,
+		defaultImportance:      opts.Importance,
+		defaultReflectInterval: opts.ReflectInterval,
+		defaultSystemPrompt:    prompt,
+		tools:                  reg,
+		maxAgents:              maxAgents,
+		maxSpawnDepth:          maxDepth,
+		perAgentRT:             make(map[world.EntityID]*agentRuntime),
+	}
+
+	root, err := s.registerAgent(registration{
+		name:         name,
+		systemPrompt: prompt,
+		brain:        opts.Brain,
+		grantedTools: nil, // root gets everything
+		memory:       opts.Memory,
+		embedder:     opts.Embedder,
+		importance:   opts.Importance,
+		reflectEvery: opts.ReflectInterval,
+		spawnedBy:    world.NoAgent,
+		spawnDepth:   0,
+	})
+	if err != nil {
+		return nil, err
+	}
+	_ = root
+	return s, nil
+}
+
+// registration captures everything registerAgent needs.
+type registration struct {
+	name         string
+	systemPrompt string
+	brain        brain.Brain
+	grantedTools []string
+	memory       *memory.Stream
+	embedder     memory.Embedder
+	importance   memory.Importance
+	reflectEvery uint64
+	spawnedBy    world.AgentID
+	spawnDepth   int
+}
+
+// registerAgent creates an entity in the world, builds an Agent
+// runtime, and adds it to the sim's roster. Caller holds s.mu when
+// called from SpawnAgent; the root creator from New does not hold
+// it yet but no concurrent access is possible at construction time.
+func (s *Sim) registerAgent(r registration) (*agent.Agent, error) {
+	id, err := s.World.Create(r.spawnedBy, "agent", world.Properties{
+		"name":          r.name,
+		"role":          roleLabel(r.spawnedBy),
+		"system_prompt": r.systemPrompt,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sim: spawn agent entity: %w", err)
+	}
+
+	reg := s.tools
+	if len(r.grantedTools) > 0 {
+		sub, err := s.tools.Filter(r.grantedTools)
+		if err != nil {
+			return nil, fmt.Errorf("sim: grant tools: %w", err)
+		}
+		reg = sub
+	}
+
+	ag, err := agent.New(id, r.name, r.systemPrompt, r.brain, reg)
+	if err != nil {
+		return nil, fmt.Errorf("sim: build agent: %w", err)
+	}
+	mem := r.memory
+	if mem == nil {
+		mem = memory.New(memory.DefaultWeights(), 100)
+	}
+	ag.Memory = mem
+	ag.Embedder = r.embedder
+	ag.Importance = r.importance
+	ag.SpawnDepth = r.spawnDepth
+
+	rt := &agentRuntime{spawnedBy: r.spawnedBy}
+	if r.reflectEvery > 0 {
+		rt.reflector = &memory.Reflector{Brain: r.brain, Interval: r.reflectEvery}
+	}
+
+	s.agents = append(s.agents, ag)
+	s.perAgentRT[id] = rt
+	return ag, nil
+}
+
+func roleLabel(parent world.AgentID) string {
+	if parent == world.NoAgent {
+		return "creator"
+	}
+	return "spawned"
+}
+
+// Agents returns the current agent roster in spawn order. Exposed
+// mainly for tests and the TUI's focus cycling.
+func (s *Sim) Agents() []*agent.Agent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*agent.Agent, len(s.agents))
+	copy(out, s.agents)
+	return out
+}
+
+// AgentByID returns the agent with the given EntityID, or nil.
+func (s *Sim) AgentByID(id world.EntityID) *agent.Agent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, a := range s.agents {
+		if a.EntityID == id {
+			return a
+		}
+	}
+	return nil
+}
+
+// Step picks the next agent in round-robin order and runs one
+// decision cycle for it. The world tick advances when the cycle
+// wraps back to the first agent.
+func (s *Sim) Step(ctx context.Context) (StepResult, error) {
+	s.mu.Lock()
+	if len(s.agents) == 0 {
+		s.mu.Unlock()
+		return StepResult{}, ErrNoBrain
+	}
+
+	// Wrap nextIdx against the *current* roster length; agents may
+	// have been added since the last Step. Advance world tick when
+	// the cycle wraps to agent 0.
+	if s.nextIdx >= len(s.agents) {
+		s.nextIdx = 0
+	}
+	if s.nextIdx == 0 {
+		_ = s.World.AdvanceTick()
+	}
+	ag := s.agents[s.nextIdx]
+	rt := s.perAgentRT[ag.EntityID]
+	s.nextIdx++
+	s.mu.Unlock()
+
+	return s.stepAgent(ctx, ag, rt)
+}
+
+func (s *Sim) stepAgent(ctx context.Context, ag *agent.Agent, rt *agentRuntime) (StepResult, error) {
+	tick := s.World.Tick()
+
+	if s.shouldSkip(ag, rt) {
+		ag.MarkSeen(s.World)
+		res := StepResult{
+			Tick: tick, Skipped: true,
+			AgentID: ag.EntityID, AgentName: ag.Name,
+		}
+		s.publish(res)
+		return res, nil
+	}
+
+	heard := ag.DrainHeard()
+	for _, ev := range heard {
+		_ = ag.RememberHeard(ctx, tick, ev)
+	}
+
+	query := buildMemoryQuery(s.World, ag.SeenEventID)
+	mems, err := ag.RetrieveMemories(ctx, query, tick)
+	if err != nil {
+		return StepResult{Tick: tick, AgentID: ag.EntityID, AgentName: ag.Name},
+			fmt.Errorf("sim: retrieve memories: %w", err)
+	}
+
+	p := ag.BuildPerception(s.World, mems, heard)
+	defs := ag.Tools.Defs()
+	decision, err := ag.Brain.Decide(ctx, p, defs)
+	if err != nil {
+		return StepResult{Tick: tick, AgentID: ag.EntityID, AgentName: ag.Name},
+			fmt.Errorf("sim: brain.Decide: %w", err)
+	}
+
+	res := StepResult{
+		Tick:      tick,
+		AgentID:   ag.EntityID,
+		AgentName: ag.Name,
+		Thought:   decision.Thought,
+		Usage:     decision.Usage,
+	}
+	if decision.ToolCall != nil {
+		res.ToolName = decision.ToolCall.Name
+		out, terr := s.invokeTool(ctx, ag, *decision.ToolCall, tick)
+		res.ToolResult = out
+		if terr != nil {
+			res.ToolErr = terr
+		}
+	}
+	if err := ag.RememberAction(ctx, tick, res.Thought, res.ToolName, res.ToolResult); err != nil && res.ToolErr == nil {
+		res.ToolErr = err
+	}
+
+	rt.lastIdle = decision.ToolCall == nil || decision.ToolCall.Name == "Wait"
+	ag.MarkSeen(s.World)
+
+	if rt.reflector != nil && rt.reflector.ShouldReflect(tick) {
+		inserted, usage, err := rt.reflector.Reflect(ctx, ag.Memory, ag.EntityID, tick, ag.Embedder)
+		if err != nil && res.ToolErr == nil {
+			res.ToolErr = fmt.Errorf("reflection: %w", err)
+		}
+		if usage.Input != 0 || usage.Output != 0 || usage.Cached != 0 {
+			res.Usage.Input += usage.Input
+			res.Usage.Output += usage.Output
+			res.Usage.Cached += usage.Cached
+		}
+		for _, ins := range inserted {
+			res.Reflections = append(res.Reflections, ins.Content)
+		}
+	}
+
+	s.publish(res)
+	return res, nil
+}
+
+// invokeTool dispatches the agent's chosen tool. SpawnAgent and
+// Speak are intercepted here because they need access to per-world
+// agent state the registry cannot reach.
+func (s *Sim) invokeTool(ctx context.Context, ag *agent.Agent, call brain.ToolCall, tick world.Tick) (string, error) {
+	switch call.Name {
+	case "SpawnAgent":
+		return s.handleSpawn(ctx, ag, call.Args)
+	case "Speak":
+		return s.handleSpeak(ag, call.Args, tick)
+	}
+	return ag.Tools.Invoke(call, s.World, ag.EntityID)
+}
+
+func (s *Sim) handleSpawn(ctx context.Context, parent *agent.Agent, raw json.RawMessage) (string, error) {
+	var a tools.SpawnAgentArgs
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return "", fmt.Errorf("SpawnAgent: bad args: %w", err)
+	}
+	if a.Name == "" || a.SystemPrompt == "" {
+		return "", errors.New("SpawnAgent: name and system_prompt are required")
+	}
+	if s.brainFactory == nil {
+		return "", errors.New("SpawnAgent: no BrainFactory configured; spawning disabled")
+	}
+
+	s.mu.Lock()
+	if len(s.agents) >= s.maxAgents {
+		s.mu.Unlock()
+		return "", fmt.Errorf("%w: %d agents already", ErrAgentCap, len(s.agents))
+	}
+	parentDepth := parent.SpawnDepth
+	s.mu.Unlock()
+	if parentDepth+1 > s.maxSpawnDepth {
+		return "", fmt.Errorf("%w: depth %d", ErrSpawnDepth, parentDepth+1)
+	}
+
+	spec := brainSpecFromConfig(a.BrainConfig)
+	if spec == "" {
+		return "", errors.New("SpawnAgent: brain_config.spec is required (e.g. stub | anthropic:claude-haiku-4-5)")
+	}
+	childBrain, err := s.brainFactory(ctx, spec)
+	if err != nil {
+		return "", fmt.Errorf("SpawnAgent: build brain: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	child, err := s.registerAgent(registration{
+		name:         a.Name,
+		systemPrompt: a.SystemPrompt,
+		brain:        childBrain,
+		grantedTools: a.GrantedTools,
+		embedder:     s.defaultEmbedder,
+		importance:   s.defaultImportance,
+		reflectEvery: s.defaultReflectInterval,
+		spawnedBy:    parent.EntityID,
+		spawnDepth:   parentDepth + 1,
+	})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("spawned agent %q #%d with brain %s",
+		child.Name, child.EntityID, spec), nil
+}
+
+// brainSpecFromConfig extracts a brain spec string from the
+// SpawnAgentArgs.BrainConfig map. We accept either:
+//
+//	{"spec": "anthropic:claude-haiku-4-5"}    explicit
+//	{"provider": "stub"}                       provider only
+//	{"provider": "anthropic", "model": "..."}  pair
+//
+// The provider/model form is more convenient for an LLM to emit.
+func brainSpecFromConfig(cfg map[string]any) string {
+	if cfg == nil {
+		return "stub"
+	}
+	if s, ok := cfg["spec"].(string); ok && s != "" {
+		return s
+	}
+	provider, _ := cfg["provider"].(string)
+	if provider == "" {
+		return ""
+	}
+	model, _ := cfg["model"].(string)
+	if model == "" {
+		return provider
+	}
+	return provider + ":" + model
+}
+
+func (s *Sim) handleSpeak(speaker *agent.Agent, raw json.RawMessage, tick world.Tick) (string, error) {
+	var a tools.SpeakArgs
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return "", fmt.Errorf("speak: bad args: %w", err)
+	}
+	if a.Content == "" {
+		return "", errors.New("speak: content must be non-empty")
+	}
+	ev := brain.HeardEvent{
+		SpeakerID:   uint64(speaker.EntityID),
+		SpeakerName: speaker.Name,
+		Tick:        uint64(tick),
+		Content:     a.Content,
+	}
+	s.mu.Lock()
+	others := make([]*agent.Agent, 0, len(s.agents)-1)
+	for _, a := range s.agents {
+		if a.EntityID == speaker.EntityID {
+			continue
+		}
+		others = append(others, a)
+	}
+	s.mu.Unlock()
+	for _, other := range others {
+		other.DeliverHeard(ev)
+	}
+	return fmt.Sprintf("spoke to %d listener(s): %s", len(others), a.Content), nil
+}
+
+func (s *Sim) shouldSkip(ag *agent.Agent, rt *agentRuntime) bool {
+	if rt == nil || !rt.lastIdle {
+		return false
+	}
+	// A pending Speak in the inbox is invisible to the world event
+	// log; we still must wake the agent to deliver it.
+	if ag.InboxLen() > 0 {
+		return false
+	}
+	// Skip iff no substantive events have appeared since the agent
+	// last marked seen. Tick_start events represent the passage of
+	// world time only and don't warrant re-engaging the brain.
+	for _, e := range s.World.Events() {
+		if e.ID <= ag.SeenEventID {
+			continue
+		}
+		if e.Kind == world.EventTickStart {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func (s *Sim) publish(res StepResult) {
+	if s.Observer != nil {
+		s.Observer(res)
+	}
+}
+
+// Close releases every attached brain. Safe to call once.
+func (s *Sim) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var firstErr error
+	for _, a := range s.agents {
+		if a.Brain == nil {
+			continue
+		}
+		if err := a.Brain.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// buildMemoryQuery is the stable string the sim hashes into a query
+// embedding. It captures the rough shape of the agent's current
+// situation so semantically related past memories surface.
+func buildMemoryQuery(w *world.World, since world.EventID) string {
+	ents := w.Entities()
+	types := make(map[string]int, 8)
+	for _, e := range ents {
+		types[e.TypeLabel]++
+	}
+	var typeParts []string
+	for k, v := range types {
+		typeParts = append(typeParts, fmt.Sprintf("%d %s", v, k))
+	}
+	sort.Strings(typeParts)
+
+	var recent []string
+	for _, e := range w.Events() {
+		if e.ID <= since {
+			continue
+		}
+		if e.Kind == world.EventTickStart {
+			continue
+		}
+		recent = append(recent, string(e.Kind))
+		if len(recent) >= 4 {
+			break
+		}
+	}
+	return memory.SummariseQuery(len(ents), append(typeParts, recent...))
+}
+
+// Agent is the root creator. Exposed as a property for backward
+// compatibility with callers that still expect a single-agent Sim.
+// The TUI's focus model uses Agents() instead.
+func (s *Sim) Agent() *agent.Agent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.agents) == 0 {
+		return nil
+	}
+	return s.agents[0]
+}
+
+// _ keeps the strings import live in case future tooling parses it.
+var _ = strings.TrimSpace
