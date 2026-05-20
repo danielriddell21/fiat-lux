@@ -24,13 +24,17 @@ func mustWorld(t *testing.T) *world.World {
 func TestDefaultRegistry_HasAllNamedTools(t *testing.T) {
 	t.Parallel()
 	reg := Default()
-	for _, name := range []string{"Create", "Modify", "Destroy", "Relate", "Unrelate", "Observe", "Reflect", "SpawnAgent", "Speak", "Wait"} {
+	for _, name := range []string{
+		"Create", "Modify", "Destroy", "Relate", "Unrelate",
+		"Observe", "Reflect", "SpawnAgent", "Speak", "Wait",
+		"FindByType", "FindByProperty", "FindRelated",
+	} {
 		if _, ok := reg.Get(name); !ok {
 			t.Errorf("registry missing tool %q", name)
 		}
 	}
-	if got := len(reg.All()); got != 10 {
-		t.Errorf("registry size = %d, want 10", got)
+	if got := len(reg.All()); got != 13 {
+		t.Errorf("registry size = %d, want 13", got)
 	}
 }
 
@@ -289,6 +293,166 @@ func TestRegistry_InvokeUnknown(t *testing.T) {
 	if !errors.Is(err, ErrUnknownTool) {
 		t.Errorf("err = %v, want ErrUnknownTool", err)
 	}
+}
+
+func TestFindByType_Matches(t *testing.T) {
+	t.Parallel()
+	w := mustWorld(t)
+	_, _ = w.Create(1, "planet", world.Properties{"name": "Erith"})
+	_, _ = w.Create(1, "planet", world.Properties{"name": "Pelor"})
+	_, _ = w.Create(1, "star", world.Properties{"name": "Helios"})
+
+	out, err := FindByType().Apply(w, 1, json.RawMessage(`{"type_label":"planet"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Matches []findHit `json:"matches"`
+		Count   int       `json:"count"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("decode result: %v\nraw: %s", err, out)
+	}
+	if got.Count != 2 || len(got.Matches) != 2 {
+		t.Fatalf("expected 2 matches, got %d: %+v", got.Count, got)
+	}
+	names := map[string]bool{got.Matches[0].Name: true, got.Matches[1].Name: true}
+	if !names["Erith"] || !names["Pelor"] {
+		t.Errorf("expected Erith and Pelor, got %+v", got.Matches)
+	}
+}
+
+func TestFindByType_EmptyResult(t *testing.T) {
+	t.Parallel()
+	w := mustWorld(t)
+	out, err := FindByType().Apply(w, 1, json.RawMessage(`{"type_label":"unicorn"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(out, `"count":0`) {
+		t.Errorf("empty result missing count:0: %q", out)
+	}
+}
+
+func TestFindByType_RequiresType(t *testing.T) {
+	t.Parallel()
+	w := mustWorld(t)
+	if _, err := FindByType().Apply(w, 1, json.RawMessage(`{"type_label":""}`)); err == nil {
+		t.Errorf("expected error for empty type_label")
+	}
+}
+
+func TestFindByProperty_Matches(t *testing.T) {
+	t.Parallel()
+	w := mustWorld(t)
+	_, _ = w.Create(1, "flower", world.Properties{"colour": "blue"})
+	_, _ = w.Create(1, "flower", world.Properties{"colour": "red"})
+	_, _ = w.Create(1, "flower", world.Properties{"colour": "blue"})
+
+	out, err := FindByProperty().Apply(w, 1, json.RawMessage(`{"key":"colour","value":"blue"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Matches []findHit `json:"matches"`
+		Count   int       `json:"count"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if got.Count != 2 {
+		t.Errorf("expected 2 blue flowers, got %d", got.Count)
+	}
+}
+
+func TestFindByProperty_NumberValue(t *testing.T) {
+	t.Parallel()
+	w := mustWorld(t)
+	_, _ = w.Create(1, "thing", world.Properties{"size": float64(42)})
+	_, _ = w.Create(1, "thing", world.Properties{"size": float64(99)})
+
+	out, err := FindByProperty().Apply(w, 1, json.RawMessage(`{"key":"size","value":42}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(out, `"count":1`) {
+		t.Errorf("expected one match, got %q", out)
+	}
+}
+
+func TestFindRelated_OutgoingAndIncoming(t *testing.T) {
+	t.Parallel()
+	w := mustWorld(t)
+	planet, _ := w.Create(1, "planet", world.Properties{"name": "Erith"})
+	ocean, _ := w.Create(1, "ocean", world.Properties{"name": "Mare"})
+	mountain, _ := w.Create(1, "mountain", nil)
+	_, _ = w.Relate(1, ocean, planet, "part of")    // ocean -> planet
+	_, _ = w.Relate(1, planet, mountain, "contains") // planet -> mountain
+
+	out, err := FindRelated().Apply(w, 1, json.RawMessage(`{"entity_id":`+itoa(uint64(planet))+`}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Matches []relatedHit `json:"matches"`
+		Count   int          `json:"count"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Count != 2 {
+		t.Fatalf("expected 2 related, got %d: %+v", got.Count, got)
+	}
+	directions := map[string]string{}
+	for _, h := range got.Matches {
+		directions[h.Type] = h.Direction
+	}
+	if directions["ocean"] != "incoming" {
+		t.Errorf("ocean direction = %q, want incoming", directions["ocean"])
+	}
+	if directions["mountain"] != "outgoing" {
+		t.Errorf("mountain direction = %q, want outgoing", directions["mountain"])
+	}
+}
+
+func TestFindRelated_KindFilter(t *testing.T) {
+	t.Parallel()
+	w := mustWorld(t)
+	a, _ := w.Create(1, "a", nil)
+	b, _ := w.Create(1, "b", nil)
+	c, _ := w.Create(1, "c", nil)
+	_, _ = w.Relate(1, a, b, "knows")
+	_, _ = w.Relate(1, a, c, "part of")
+
+	out, err := FindRelated().Apply(w, 1, json.RawMessage(`{"entity_id":`+itoa(uint64(a))+`,"kind":"knows"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(out, `"count":1`) {
+		t.Errorf("expected 1 match with kind filter, got %q", out)
+	}
+}
+
+func TestFindRelated_RequiresEntityID(t *testing.T) {
+	t.Parallel()
+	w := mustWorld(t)
+	if _, err := FindRelated().Apply(w, 1, json.RawMessage(`{"entity_id":0}`)); err == nil {
+		t.Errorf("expected error for entity_id=0")
+	}
+}
+
+func itoa(n uint64) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
 }
 
 func contains(s, sub string) bool {

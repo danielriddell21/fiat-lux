@@ -12,9 +12,10 @@ import (
 
 // Default returns the full tool catalogue: Create, Modify,
 // Destroy, Relate, Unrelate, Observe, Reflect, SpawnAgent, Speak,
-// Wait. SpawnAgent and Speak are intercepted by the sim layer
-// (which has access to per-world agent state); their Apply funcs
-// are minimal stubs the sim never invokes.
+// Wait, FindByType, FindByProperty, FindRelated. SpawnAgent and
+// Speak are intercepted by the sim layer (which has access to
+// per-world agent state); their Apply funcs are minimal stubs the
+// sim never invokes.
 func Default() *Registry {
 	return NewRegistry(
 		Create(),
@@ -27,6 +28,9 @@ func Default() *Registry {
 		SpawnAgent(),
 		Speak(),
 		Wait(),
+		FindByType(),
+		FindByProperty(),
+		FindRelated(),
 	)
 }
 
@@ -497,6 +501,268 @@ func Wait() Tool {
 			return b, true
 		},
 	}
+}
+
+// ---- FindByType -------------------------------------------------------------
+
+type findByTypeArgs struct {
+	TypeLabel string `json:"type_label"`
+}
+
+type findHit struct {
+	ID   uint64 `json:"id"`
+	Type string `json:"type"`
+	Name string `json:"name,omitempty"`
+}
+
+// FindByType lists every live entity whose TypeLabel matches the
+// argument. Read-only; returns a JSON object the brain can parse on
+// its next turn.
+func FindByType() Tool {
+	return Tool{
+		Name:        "FindByType",
+		Description: "Read-only. List every live entity whose type matches. Returns JSON: {\"matches\":[{id,type,name}, ...],\"count\":N}.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"type_label": map[string]any{"type": "string", "description": "exact type label to match"},
+			},
+			"required": []string{"type_label"},
+		},
+		Apply: func(w *world.World, _ world.AgentID, raw json.RawMessage) (string, error) {
+			var a findByTypeArgs
+			if err := json.Unmarshal(raw, &a); err != nil {
+				return "", fmt.Errorf("FindByType: bad args: %w", err)
+			}
+			if a.TypeLabel == "" {
+				return "", errors.New("FindByType: type_label must be non-empty")
+			}
+			hits := []findHit{}
+			for _, e := range w.Entities() {
+				if e.TypeLabel != a.TypeLabel {
+					continue
+				}
+				hits = append(hits, findHit{ID: uint64(e.ID), Type: e.TypeLabel, Name: stringProp(e.Properties, "name")})
+			}
+			return encodeMatches(hits)
+		},
+		RandomArgs: func(rng *rand.Rand, p brain.Perception) (json.RawMessage, bool) {
+			if len(p.AliveEntities) == 0 {
+				return nil, false
+			}
+			e := p.AliveEntities[rng.IntN(len(p.AliveEntities))]
+			b, err := json.Marshal(findByTypeArgs{TypeLabel: e.TypeLabel})
+			if err != nil {
+				return nil, false
+			}
+			return b, true
+		},
+	}
+}
+
+// ---- FindByProperty ---------------------------------------------------------
+
+type findByPropertyArgs struct {
+	Key   string `json:"key"`
+	Value any    `json:"value"`
+}
+
+// FindByProperty lists every live entity whose Properties[Key]
+// equals Value (compared after JSON round-trip so numbers, bools,
+// and strings work). Read-only.
+func FindByProperty() Tool {
+	return Tool{
+		Name:        "FindByProperty",
+		Description: "Read-only. List every live entity whose property matches a key/value pair. Returns JSON: {\"matches\":[{id,type,name}, ...],\"count\":N}.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"key":   map[string]any{"type": "string", "description": "property key to compare"},
+				"value": map[string]any{"description": "value to match; strings, numbers, and booleans supported"},
+			},
+			"required": []string{"key", "value"},
+		},
+		Apply: func(w *world.World, _ world.AgentID, raw json.RawMessage) (string, error) {
+			var a findByPropertyArgs
+			if err := json.Unmarshal(raw, &a); err != nil {
+				return "", fmt.Errorf("FindByProperty: bad args: %w", err)
+			}
+			if a.Key == "" {
+				return "", errors.New("FindByProperty: key must be non-empty")
+			}
+			hits := []findHit{}
+			for _, e := range w.Entities() {
+				got, ok := e.Properties[a.Key]
+				if !ok {
+					continue
+				}
+				if !propsEqual(got, a.Value) {
+					continue
+				}
+				hits = append(hits, findHit{ID: uint64(e.ID), Type: e.TypeLabel, Name: stringProp(e.Properties, "name")})
+			}
+			return encodeMatches(hits)
+		},
+		RandomArgs: func(rng *rand.Rand, p brain.Perception) (json.RawMessage, bool) {
+			// Pick a random alive entity and one of its properties as
+			// the target. Returns nil if no entity has any property.
+			for tries := 0; tries < 4 && len(p.AliveEntities) > 0; tries++ {
+				e := p.AliveEntities[rng.IntN(len(p.AliveEntities))]
+				if len(e.Properties) == 0 {
+					continue
+				}
+				keys := make([]string, 0, len(e.Properties))
+				for k := range e.Properties {
+					keys = append(keys, k)
+				}
+				k := keys[rng.IntN(len(keys))]
+				b, err := json.Marshal(findByPropertyArgs{Key: k, Value: e.Properties[k]})
+				if err == nil {
+					return b, true
+				}
+			}
+			return nil, false
+		},
+	}
+}
+
+// ---- FindRelated ------------------------------------------------------------
+
+type findRelatedArgs struct {
+	EntityID uint64 `json:"entity_id"`
+	Kind     string `json:"kind,omitempty"`
+}
+
+type relatedHit struct {
+	ID        uint64 `json:"id"`
+	Type      string `json:"type"`
+	Name      string `json:"name,omitempty"`
+	Kind      string `json:"kind"`
+	Direction string `json:"direction"` // "outgoing" if entity is From; "incoming" if To
+}
+
+// FindRelated lists every live entity related to the given entity,
+// optionally filtered by relationship kind. Read-only.
+func FindRelated() Tool {
+	return Tool{
+		Name:        "FindRelated",
+		Description: "Read-only. List entities related to entity_id. Optional kind filter. Returns JSON: {\"matches\":[{id,type,name,kind,direction}, ...],\"count\":N}.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"entity_id": map[string]any{"type": "integer", "description": "id of the entity whose relationships to inspect"},
+				"kind":      map[string]any{"type": "string", "description": "optional relationship-kind filter"},
+			},
+			"required": []string{"entity_id"},
+		},
+		Apply: func(w *world.World, _ world.AgentID, raw json.RawMessage) (string, error) {
+			var a findRelatedArgs
+			if err := json.Unmarshal(raw, &a); err != nil {
+				return "", fmt.Errorf("FindRelated: bad args: %w", err)
+			}
+			if a.EntityID == 0 {
+				return "", errors.New("FindRelated: entity_id must be > 0")
+			}
+			target := world.EntityID(a.EntityID)
+			byID := make(map[world.EntityID]world.Entity)
+			for _, e := range w.Entities() {
+				byID[e.ID] = e
+			}
+			hits := []relatedHit{}
+			for _, r := range w.Relationships() {
+				var otherID world.EntityID
+				var direction string
+				switch {
+				case r.From == target:
+					otherID, direction = r.To, "outgoing"
+				case r.To == target:
+					otherID, direction = r.From, "incoming"
+				default:
+					continue
+				}
+				if a.Kind != "" && r.Kind != a.Kind {
+					continue
+				}
+				other, ok := byID[otherID]
+				if !ok {
+					continue
+				}
+				hits = append(hits, relatedHit{
+					ID:        uint64(other.ID),
+					Type:      other.TypeLabel,
+					Name:      stringProp(other.Properties, "name"),
+					Kind:      r.Kind,
+					Direction: direction,
+				})
+			}
+			out := struct {
+				Matches []relatedHit `json:"matches"`
+				Count   int          `json:"count"`
+			}{Matches: hits, Count: len(hits)}
+			b, err := json.Marshal(out)
+			if err != nil {
+				return "", fmt.Errorf("FindRelated: encode result: %w", err)
+			}
+			return string(b), nil
+		},
+		RandomArgs: func(rng *rand.Rand, p brain.Perception) (json.RawMessage, bool) {
+			if len(p.AliveEntities) == 0 {
+				return nil, false
+			}
+			e := p.AliveEntities[rng.IntN(len(p.AliveEntities))]
+			args := findRelatedArgs{EntityID: e.ID}
+			// Half the time, also filter by a random observed relation kind.
+			if len(p.AliveRelationships) > 0 && rng.IntN(2) == 0 {
+				args.Kind = p.AliveRelationships[rng.IntN(len(p.AliveRelationships))].Kind
+			}
+			b, err := json.Marshal(args)
+			if err != nil {
+				return nil, false
+			}
+			return b, true
+		},
+	}
+}
+
+// encodeMatches packages a list of findHits into the standard JSON
+// envelope used by FindByType and FindByProperty.
+func encodeMatches(hits []findHit) (string, error) {
+	out := struct {
+		Matches []findHit `json:"matches"`
+		Count   int       `json:"count"`
+	}{Matches: hits, Count: len(hits)}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func stringProp(p world.Properties, key string) string {
+	if p == nil {
+		return ""
+	}
+	if s, ok := p[key].(string); ok {
+		return s
+	}
+	return ""
+}
+
+// propsEqual compares two property values for equality after a JSON
+// round-trip on the right-hand side. Properties values are
+// JSON-shaped (string, float64, bool, nil, []any, map[string]any) so
+// this is a defensible comparison: it matches what callers actually
+// observe through the API.
+func propsEqual(got, want any) bool {
+	wb, err := json.Marshal(want)
+	if err != nil {
+		return false
+	}
+	gb, err := json.Marshal(got)
+	if err != nil {
+		return false
+	}
+	return string(wb) == string(gb)
 }
 
 // ---- shared fixtures for RandomArgs -----------------------------------------

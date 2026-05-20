@@ -32,16 +32,21 @@ func New(seed1, seed2 uint64, reg *tools.Registry) *Brain {
 			// content quickly - this provides the visible-output
 			// guarantee. Destroy / Unrelate are zero because a random
 			// destroy of the root agent leaves the world inert; later
-			// iterations attach more deliberation.
-			"Create":     20,
-			"Modify":     1,
-			"Destroy":    0,
-			"Relate":     4,
-			"Unrelate":   0,
-			"Observe":    1,
-			"Reflect":    1,
-			"Wait":       1,
-			"SpawnAgent": 0, // disabled
+			// iterations attach more deliberation. Query tools get a
+			// small weight so the stub exercises them without drowning
+			// out world growth.
+			"Create":         20,
+			"Modify":         1,
+			"Destroy":        0,
+			"Relate":         4,
+			"Unrelate":       0,
+			"Observe":        1,
+			"Reflect":        1,
+			"Wait":           1,
+			"SpawnAgent":     0, // disabled
+			"FindByType":     1,
+			"FindByProperty": 1,
+			"FindRelated":    1,
 		},
 	}
 }

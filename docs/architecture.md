@@ -60,18 +60,21 @@ sequenceDiagram
 
 ## Tool vocabulary
 
-| Tool         | Effect                                                                 |
-| ------------ | ---------------------------------------------------------------------- |
-| `Create`     | Bring a new entity into being. type_label + properties are free-form.  |
-| `Modify`     | RFC 7396 JSON merge patch on an entity's properties.                   |
-| `Destroy`    | Soft-delete; relationships referencing it cascade-soft-delete.         |
-| `Relate`     | Declare a relationship with an agent-chosen kind string.               |
-| `Unrelate`   | Soft-delete a relationship.                                            |
-| `Observe`    | Survey the world; filter by type_label.                                |
-| `Reflect`    | Write a high-importance memory; no world mutation.                     |
-| `SpawnAgent` | Create an agent-entity with its own brain, system prompt, granted tools. |
-| `Speak`      | Broadcast to other agents; recipients see it as `Heard` next tick.      |
-| `Wait`       | Skip n ticks.                                                          |
+| Tool             | Effect                                                                 |
+| ---------------- | ---------------------------------------------------------------------- |
+| `Create`         | Bring a new entity into being. type_label + properties are free-form.  |
+| `Modify`         | RFC 7396 JSON merge patch on an entity's properties.                   |
+| `Destroy`        | Soft-delete; relationships referencing it cascade-soft-delete.         |
+| `Relate`         | Declare a relationship with an agent-chosen kind string.               |
+| `Unrelate`       | Soft-delete a relationship.                                            |
+| `Observe`        | Survey the world; filter by type_label. Returns a short summary.       |
+| `Reflect`        | Write a high-importance memory; no world mutation.                     |
+| `SpawnAgent`     | Create an agent-entity with its own brain, system prompt, granted tools. |
+| `Speak`          | Broadcast to other agents; recipients see it as `Heard` next tick.      |
+| `Wait`           | Skip n ticks.                                                          |
+| `FindByType`     | Read-only. List live entities whose type matches. Returns structured JSON. |
+| `FindByProperty` | Read-only. List live entities where properties[key] matches a value.   |
+| `FindRelated`    | Read-only. List entities related to entity_id, optionally by relation kind. |
 
 ## Event sourcing
 
