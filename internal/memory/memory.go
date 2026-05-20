@@ -34,18 +34,18 @@ const (
 // Record is one entry in an agent's memory stream. Smallville's
 // "MemoryRecord" - id, owner, when, what, why-it-matters, how-to-find.
 type Record struct {
-	ID          RecordID
-	AgentID     world.AgentID
-	Kind        Kind
-	Content     string
-	CreatedAt   world.Tick
-	CreatedWall time.Time
-	Importance  float64   // 0..10 scale
-	Embedding   []float64 // nil-or-empty when no embedder is configured
+	ID          RecordID      `json:"id"`
+	AgentID     world.AgentID `json:"agent_id"`
+	Kind        Kind          `json:"kind"`
+	Content     string        `json:"content"`
+	CreatedAt   world.Tick    `json:"created_at"`
+	CreatedWall time.Time     `json:"created_wall"`
+	Importance  float64       `json:"importance"`
+	Embedding   []float64     `json:"-"` // omitted from JSON: large, useless to UI
 	// LastAccessTick tracks when this record was most recently
 	// retrieved; recency is measured as "since last access" rather
 	// than "since creation". Zero means never retrieved.
-	LastAccessTick world.Tick
+	LastAccessTick world.Tick `json:"last_access_tick,omitempty"`
 }
 
 // ScoreWeights controls the relative contributions of the three

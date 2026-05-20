@@ -20,6 +20,18 @@ type Config struct {
 	ReflectInterval uint64        `yaml:"reflect_interval,omitempty"`
 	MaxAgents       int           `yaml:"max_agents,omitempty"`
 	MaxSpawnDepth   int           `yaml:"max_spawn_depth,omitempty"`
+
+	// Web configures the optional in-process web viewer. When Addr is
+	// non-empty the CLI starts an HTTP server at that address alongside
+	// the TUI. The --web-addr CLI flag takes precedence when both set.
+	Web WebConfig `yaml:"web,omitempty"`
+}
+
+// WebConfig is the YAML form of the web viewer options.
+type WebConfig struct {
+	// Addr is the listen address, e.g. ":8080" or "127.0.0.1:8080".
+	// Empty disables the web viewer.
+	Addr string `yaml:"addr,omitempty"`
 }
 
 // WorldConfig is one world's spec.

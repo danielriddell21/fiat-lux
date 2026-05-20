@@ -24,6 +24,8 @@ reasoning and tool calls. Pause it. Scrub it. Replay it.
   parallel; `ctrl-tab` swaps focus.
 - **Replay**: every mutation is event-sourced, so a saved world
   rebuilds byte-exactly.
+- **Web viewer**: optional embedded HTTP server renders the kosmos as
+  a live force-directed graph. Add `--web-addr 127.0.0.1:8080`.
 
 ## Try it
 

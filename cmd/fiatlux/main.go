@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"math/rand/v2"
 	"net/http"
 	"os"
@@ -32,6 +33,7 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/store"
 	"github.com/danielriddell21/fiat-lux/internal/tools"
 	"github.com/danielriddell21/fiat-lux/internal/tui"
+	"github.com/danielriddell21/fiat-lux/internal/webui"
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
@@ -127,7 +129,11 @@ run flags:
   --max-agents <n>    Cap on total agents per world.              (default: 8)
   --max-spawn-depth   Cap on the spawn graph height.              (default: 3)
   --config <path>     YAML config for a multi-world universe.
-                      Overrides --brain. See examples/cloud-haiku.yaml.`)
+                      Overrides --brain. See examples/cloud-haiku.yaml.
+  --web-addr <addr>   Bind the embedded web viewer at this address
+                      (e.g. 127.0.0.1:8080). Empty = disabled.
+                      Also configurable via the YAML config's
+                      'web.addr' key; the flag wins when both set.`)
 	return err
 }
 
@@ -144,6 +150,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	maxAgents := fs.Int("max-agents", 8, "cap on total agents per world")
 	maxSpawnDepth := fs.Int("max-spawn-depth", 3, "cap on the spawn graph height")
 	configPath := fs.String("config", "", "YAML config for a multi-world universe (overrides --brain)")
+	webAddr := fs.String("web-addr", "", "address to bind the optional web viewer (e.g. 127.0.0.1:8080)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -172,14 +179,19 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	var stepper tui.Stepper
+	var (
+		stepper      tui.Stepper
+		simProvider  webui.SimProvider
+		yamlWebAddr  string
+		attachOnSims []*sim.Sim // sims whose Observer the webui will subscribe to
+	)
 	switch {
 	case *configPath != "":
 		embedder, err := buildEmbedder(*embedderSpec)
 		if err != nil {
 			return fmt.Errorf("build embedder: %w", err)
 		}
-		u, err := loadUniverse(ctx, *configPath, embedder)
+		u, cfg, err := loadUniverse(ctx, *configPath, embedder)
 		if err != nil {
 			return err
 		}
@@ -188,6 +200,11 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		// world so save/load and the TUI agree.
 		w = u.Focused().World
 		stepper = newUniverseAdapter(u)
+		simProvider = func() *sim.Sim { return u.Focused() }
+		attachOnSims = u.Sims()
+		if cfg != nil {
+			yamlWebAddr = cfg.Web.Addr
+		}
 	case *brainSpec != "none":
 		embedder, err := buildEmbedder(*embedderSpec)
 		if err != nil {
@@ -199,6 +216,21 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		}
 		defer func() { _ = s.Close() }()
 		stepper = newSimAdapter(s)
+		simProvider = func() *sim.Sim { return s }
+		attachOnSims = []*sim.Sim{s}
+	}
+
+	// Resolve the web address: CLI flag wins, then YAML config.
+	resolvedWebAddr := *webAddr
+	if resolvedWebAddr == "" {
+		resolvedWebAddr = yamlWebAddr
+	}
+	if resolvedWebAddr != "" && simProvider != nil {
+		stop, err := startWebUI(ctx, resolvedWebAddr, simProvider, attachOnSims, stderr)
+		if err != nil {
+			return err
+		}
+		defer stop()
 	}
 
 	if err := tui.Run(ctx, tui.RunOptions{
@@ -210,8 +242,65 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	}); err != nil {
 		return err
 	}
-	_ = stderr
 	return nil
+}
+
+// startWebUI launches the embedded HTTP viewer and attaches its
+// broker to each sim's Observer. Returns a stop func the caller
+// must invoke before exiting so the listener releases its port.
+func startWebUI(ctx context.Context, addr string, provider webui.SimProvider, attachOn []*sim.Sim, stderr io.Writer) (func(), error) {
+	logger := log.New(stderr, "", log.LstdFlags)
+	server, err := webui.New(webui.Options{
+		Addr:     addr,
+		Provider: provider,
+		Logger:   logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("web ui: %w", err)
+	}
+	for _, s := range attachOn {
+		s.Observer = chainObservers(s.Observer, server.Publish)
+	}
+	serveErr := make(chan error, 1)
+	go func() {
+		if err := server.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serveErr <- err
+		}
+		close(serveErr)
+	}()
+	// Surface a synchronous bind error quickly.
+	select {
+	case err := <-serveErr:
+		if err != nil {
+			return nil, fmt.Errorf("web ui: %w", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+	}
+	return func() {
+		shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutCtx)
+		// Detach Publish from every sim we attached to so a slow
+		// shutdown can't dispatch into a now-closed broker.
+		for _, s := range attachOn {
+			s.Observer = nil
+		}
+	}, nil
+}
+
+// chainObservers composes two Sim.Observer-shaped callbacks. nil
+// callbacks are silently dropped.
+func chainObservers(a, b func(sim.StepResult)) func(sim.StepResult) {
+	if a == nil {
+		return b
+	}
+	if b == nil {
+		return a
+	}
+	return func(r sim.StepResult) {
+		a(r)
+		b(r)
+	}
 }
 
 // buildSim wires up a Sim from the brain spec string. Supported specs:
@@ -569,20 +658,26 @@ func (a *universeAdapter) MemorySnapshot() tui.MemorySnapshot {
 }
 
 // loadUniverse opens the YAML config and builds a Universe from it.
-func loadUniverse(ctx context.Context, path string, embedder memory.Embedder) (*sim.Universe, error) {
+// Also returns the parsed Config so callers can read top-level
+// settings (e.g. Web.Addr) that aren't part of the Universe itself.
+func loadUniverse(ctx context.Context, path string, embedder memory.Embedder) (*sim.Universe, *sim.Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("open config: %w", err)
+		return nil, nil, fmt.Errorf("open config: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 	cfg, err := sim.LoadYAML(f)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	factory := func(_ context.Context, spec string) (brain.Brain, error) {
 		return buildBrain(spec)
 	}
-	return cfg.BuildUniverse(ctx, factory, embedder)
+	u, err := cfg.BuildUniverse(ctx, factory, embedder)
+	if err != nil {
+		return nil, nil, err
+	}
+	return u, cfg, nil
 }
 
 // cmdReplay opens a stored world's event log and walks it tick by

@@ -30,16 +30,16 @@ func isContainment(kind string) bool {
 // Exposed as its own type so the renderer can be tested independently
 // of styling.
 type TreeView struct {
-	Roots []TreeNode
+	Roots []TreeNode `json:"roots"`
 }
 
 // TreeNode is one entry in the creation tree.
 type TreeNode struct {
-	ID        world.EntityID
-	TypeLabel string
-	Name      string // pulled from properties["name"] when present
-	Destroyed bool
-	Children  []TreeNode
+	ID        world.EntityID `json:"id"`
+	TypeLabel string         `json:"type"`
+	Name      string         `json:"name,omitempty"` // pulled from properties["name"] when present
+	Destroyed bool           `json:"destroyed,omitempty"`
+	Children  []TreeNode     `json:"children,omitempty"`
 }
 
 // BuildTreeView assembles a TreeView from a world snapshot. Entities

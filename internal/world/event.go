@@ -21,44 +21,44 @@ const (
 type Event struct {
 	// ID is the monotonically assigned event number within this
 	// World, starting at 1.
-	ID EventID
+	ID EventID `json:"id"`
 
 	// Tick is the simulation tick at which the event was emitted.
-	Tick Tick
+	Tick Tick `json:"tick"`
 
 	// Kind discriminates the event.
-	Kind EventKind
+	Kind EventKind `json:"kind"`
 
 	// Agent is the AgentID responsible. NoAgent (zero) is allowed
 	// for tick_start events and seeded test data.
-	Agent AgentID
+	Agent AgentID `json:"agent,omitempty"`
 
 	// EntityID is the affected entity for Create / Modify /
 	// Destroy. Zero for Relate / Unrelate / TickStart.
-	EntityID EntityID
+	EntityID EntityID `json:"entity_id,omitempty"`
 
 	// RelID is the affected relationship for Relate / Unrelate.
 	// Zero for Create / Modify / Destroy / TickStart.
-	RelID RelationshipID
+	RelID RelationshipID `json:"rel_id,omitempty"`
 
 	// TypeLabel is the entity's agent-chosen type. Set only on
 	// Create.
-	TypeLabel string
+	TypeLabel string `json:"type_label,omitempty"`
 
 	// Props carries Create's initial properties or Modify's patch.
-	Props Properties
+	Props Properties `json:"props,omitempty"`
 
 	// From / To are the endpoint EntityIDs of a Relate event.
-	From EntityID
-	To   EntityID
+	From EntityID `json:"from,omitempty"`
+	To   EntityID `json:"to,omitempty"`
 
 	// RelKind is the agent-chosen relationship label on Relate.
-	RelKind string
+	RelKind string `json:"rel_kind,omitempty"`
 
 	// Cascade is true on Destroy / Unrelate events that were
 	// triggered by cascade (currently: unrelate cascading from a
 	// destroyed entity).
-	Cascade bool
+	Cascade bool `json:"cascade,omitempty"`
 }
 
 // Clone returns a deep copy of the event, including its Props.

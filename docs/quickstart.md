@@ -70,6 +70,24 @@ export OPENAI_API_KEY=...
 Once the TUI is up, press `ctrl-tab` to switch between worlds. Each
 has its own creator, memory, and event log.
 
+## Web viewer
+
+Add `--web-addr` to any `run` command to serve a force-directed graph
+of the kosmos at `http://localhost:8080` while the TUI is running.
+
+```bash
+./fiatlux run --brain=stub --web-addr 127.0.0.1:8080
+```
+
+The browser view shows entities as nodes and relationships as edges.
+A toggle at the top right switches to a tree view that mirrors the
+TUI's Creation Tree. The address is also configurable from YAML:
+
+```yaml
+web:
+  addr: 127.0.0.1:8080
+```
+
 ## Persist and replay
 
 ```bash

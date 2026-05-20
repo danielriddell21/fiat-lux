@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>fiat-lux</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js" defer></script>
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <h1>fiat-lux</h1>
+    <div class="meta">
+      <span class="world" id="world-name">—</span>
+      <span class="tick">tick <strong id="tick">0</strong></span>
+      <span class="counts">
+        <strong id="entity-count">0</strong> entities ·
+        <strong id="rel-count">0</strong> relationships ·
+        <strong id="agent-count">0</strong> agents
+      </span>
+    </div>
+    <nav>
+      <button id="view-graph" class="view-btn active" data-view="graph" type="button">Graph</button>
+      <button id="view-tree" class="view-btn" data-view="tree" type="button">Tree</button>
+    </nav>
+  </header>
+
+  <main>
+    <section class="canvas-wrap">
+      <div id="cy" data-active></div>
+      <pre id="tree" class="tree-view"></pre>
+      <div id="empty" class="empty">The void. Waiting for the agent to create&hellip;</div>
+    </section>
+
+    <aside class="rail">
+      <section class="card">
+        <h2>Agents</h2>
+        <ul id="agents" class="agents"></ul>
+      </section>
+      <section class="card">
+        <h2>Latest thought</h2>
+        <div id="thought" class="thought faint">(no decisions yet)</div>
+        <div id="tool" class="tool"></div>
+      </section>
+      <section class="card details" id="details-card" hidden>
+        <h2>Selected</h2>
+        <div id="details"></div>
+      </section>
+    </aside>
+  </main>
+
+  <footer>
+    <div class="status">
+      <span id="conn" class="conn"></span>
+      <span class="hint">click a node for details · drag to rearrange · scroll to zoom</span>
+    </div>
+    <ul id="event-log" class="event-log"></ul>
+  </footer>
+</body>
+</html>

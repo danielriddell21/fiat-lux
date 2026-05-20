@@ -22,3 +22,9 @@ worlds:
 reflect_interval: 20
 max_agents: 8
 max_spawn_depth: 3
+
+# Uncomment to expose the embedded web viewer at http://localhost:8080
+# (or pass --web-addr on the command line). Open it in a browser to
+# see the kosmos as a force-directed graph.
+# web:
+#   addr: 127.0.0.1:8080

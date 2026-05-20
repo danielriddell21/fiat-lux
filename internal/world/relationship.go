@@ -4,29 +4,29 @@ package world
 // kind is a free-form string; the simulation never interprets it.
 type Relationship struct {
 	// ID is the world-local identifier.
-	ID RelationshipID
+	ID RelationshipID `json:"id"`
 
 	// From is the EntityID at the tail of the relationship.
-	From EntityID
+	From EntityID `json:"from"`
 
 	// To is the EntityID at the head of the relationship.
-	To EntityID
+	To EntityID `json:"to"`
 
 	// Kind is the agent-chosen relationship label ("lives in",
 	// "child of", "contains").
-	Kind string
+	Kind string `json:"kind"`
 
 	// CreatedBy is the AgentID of the agent that declared the
 	// relationship.
-	CreatedBy AgentID
+	CreatedBy AgentID `json:"created_by,omitempty"`
 
 	// CreatedAt is the tick at which the relationship was declared.
-	CreatedAt Tick
+	CreatedAt Tick `json:"created_at"`
 
 	// DestroyedAt is the tick at which the relationship was
 	// soft-deleted, or nil while it is live. Relationships are
 	// cascade-destroyed when either endpoint is destroyed.
-	DestroyedAt *Tick
+	DestroyedAt *Tick `json:"destroyed_at,omitempty"`
 }
 
 // IsAlive reports whether the relationship has not yet been
