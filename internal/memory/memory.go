@@ -97,6 +97,27 @@ func (s *Stream) Len() int {
 	return len(s.records)
 }
 
+// Restore bulk-loads pre-existing records into the stream and
+// advances the next-ID watermark past the highest restored ID.
+// Used by the store to rehydrate persisted memory at session start.
+// Existing records (if any) are replaced. Embedding fields stay
+// empty unless the caller already populated them.
+func (s *Stream) Restore(records []Record) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.records = append(s.records[:0], records...)
+	var maxID RecordID
+	for _, r := range records {
+		if r.ID > maxID {
+			maxID = r.ID
+		}
+	}
+	s.nextID = maxID + 1
+	if s.nextID == 0 {
+		s.nextID = 1
+	}
+}
+
 // All returns deep copies of every record, in insertion order.
 // Exposed for the TUI memory inspector and tests.
 func (s *Stream) All() []Record {

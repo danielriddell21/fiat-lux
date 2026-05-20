@@ -97,12 +97,20 @@ web:
 # Autosave every 30 seconds instead of pressing 's':
 ./fiatlux run --db ./kosmos.db --save-mode interval:30s
 
+# Quit and re-run: the root agent picks up its previous memory.
+./fiatlux run --db ./kosmos.db
+
 # Later, replay tick by tick.
 ./fiatlux replay --db ./kosmos.db --world kosmos --replay-tick 80ms
 ```
 
 The replay is byte-exact: world events are recorded verbatim, so
 state rebuilds the same way it did originally.
+
+When `--db` is set, the **root agent's memory** also persists across
+sessions: thoughts, actions, outcomes, and reflections from prior
+runs come back when you re-open the same world. Spawned-agent memory
+is session-scoped for now.
 
 ## Headless mode
 

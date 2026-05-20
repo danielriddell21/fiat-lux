@@ -203,11 +203,12 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	}
 
 	var (
-		stepper       tui.Stepper
-		simProvider   webui.SimProvider
-		yamlWebAddr   string
-		yamlSaveMode  string
-		attachOnSims  []*sim.Sim // sims whose Observer the webui will subscribe to
+		stepper      tui.Stepper
+		simProvider  webui.SimProvider
+		yamlWebAddr  string
+		yamlSaveMode string
+		attachOnSims []*sim.Sim // sims whose Observer the webui will subscribe to
+		simForWorld  func(name string) *sim.Sim
 	)
 	switch {
 	case *configPath != "":
@@ -226,6 +227,13 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		stepper = newUniverseAdapter(u)
 		simProvider = func() *sim.Sim { return u.Focused() }
 		attachOnSims = u.Sims()
+		simForWorld = simByName(u.Sims())
+		// Restore each world's root agent memory from the store.
+		if dbStore, ok := st.(*store.Store); ok {
+			for _, s := range u.Sims() {
+				restoreRootMemory(ctx, dbStore, s)
+			}
+		}
 		if cfg != nil {
 			yamlWebAddr = cfg.Web.Addr
 			yamlSaveMode = cfg.Save.Mode
@@ -243,6 +251,16 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		stepper = newSimAdapter(s)
 		simProvider = func() *sim.Sim { return s }
 		attachOnSims = []*sim.Sim{s}
+		simForWorld = simByName([]*sim.Sim{s})
+		if dbStore, ok := st.(*store.Store); ok {
+			restoreRootMemory(ctx, dbStore, s)
+		}
+	}
+
+	// Wrap st with a full-saver so manual 's' and autosave persist
+	// memory alongside world events.
+	if dbStore, ok := st.(*store.Store); ok && simForWorld != nil {
+		st = &fullSaver{store: dbStore, simForWorld: simForWorld}
 	}
 
 	// Resolve the web address: CLI flag wins, then YAML config.
@@ -494,6 +512,63 @@ func buildBrain(spec string) (brain.Brain, error) {
 		})
 	}
 	return nil, fmt.Errorf("brain spec %q not recognised; try 'fiatlux help'", spec)
+}
+
+// fullSaver implements tui.Storer by persisting both world events
+// and root-agent memory in a single Save call. It's what the TUI's
+// manual 's' binding and the autosave loop invoke.
+type fullSaver struct {
+	store       *store.Store
+	simForWorld func(name string) *sim.Sim
+}
+
+func (f *fullSaver) Save(ctx context.Context, w *world.World) error {
+	if err := f.store.Save(ctx, w); err != nil {
+		return err
+	}
+	s := f.simForWorld(w.Name())
+	if s == nil {
+		return nil
+	}
+	root := s.Agent()
+	if root == nil || root.Memory == nil {
+		return nil
+	}
+	return f.store.SaveMemoryRecords(ctx, w.Name(), root.Memory.All())
+}
+
+// simByName returns a closure that finds the sim whose world.Name()
+// matches the argument. Used by fullSaver to pair an incoming world
+// snapshot with the right sim's memory.
+func simByName(sims []*sim.Sim) func(string) *sim.Sim {
+	return func(name string) *sim.Sim {
+		for _, s := range sims {
+			if s.World != nil && s.World.Name() == name {
+				return s
+			}
+		}
+		return nil
+	}
+}
+
+// restoreRootMemory pulls the root agent's saved memory records out
+// of the store and hands them to the freshly-built Stream. The
+// AgentID baked into restored records may not match the new root's
+// EntityID, but retrieval doesn't filter by AgentID so this is
+// harmless and keeps continuity across sessions.
+func restoreRootMemory(ctx context.Context, dbStore *store.Store, s *sim.Sim) {
+	if s == nil || s.World == nil {
+		return
+	}
+	root := s.Agent()
+	if root == nil || root.Memory == nil {
+		return
+	}
+	records, err := dbStore.LoadMemoryRecords(ctx, s.World.Name())
+	if err != nil || len(records) == 0 {
+		return
+	}
+	root.Memory.Restore(records)
 }
 
 // simAdapter bridges *sim.Sim to tui.Stepper / MemoryAccessor /
@@ -852,6 +927,14 @@ func cmdStep(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("build sim: %w", err)
 	}
 	defer func() { _ = s.Close() }()
+
+	// Restore root-agent memory from prior runs (if any) and wrap
+	// the store with the full-saver so the final save persists
+	// memory too.
+	if dbStore, ok := st.(*store.Store); ok {
+		restoreRootMemory(ctx, dbStore, s)
+		st = &fullSaver{store: dbStore, simForWorld: simByName([]*sim.Sim{s})}
+	}
 
 	summary := stepSummary{ToolCounts: map[string]int{}}
 	start := time.Now()

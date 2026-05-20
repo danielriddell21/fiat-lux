@@ -35,4 +35,19 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS events_by_tick ON events (world_id, tick, id);
+
+CREATE TABLE IF NOT EXISTS memory_records (
+    world_name   TEXT    NOT NULL,
+    agent_id     INTEGER NOT NULL,
+    id           INTEGER NOT NULL,
+    kind         TEXT    NOT NULL,
+    content      TEXT    NOT NULL,
+    created_at   INTEGER NOT NULL DEFAULT 0,
+    created_wall TEXT    NOT NULL DEFAULT '',
+    importance   REAL    NOT NULL DEFAULT 0,
+    last_access  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (world_name, agent_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS memory_by_world ON memory_records (world_name);
 `
