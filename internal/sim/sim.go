@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/danielriddell21/fiat-lux/internal/agent"
@@ -613,6 +612,3 @@ func (s *Sim) Agent() *agent.Agent {
 	}
 	return s.agents[0]
 }
-
-// _ keeps the strings import live in case future tooling parses it.
-var _ = strings.TrimSpace
