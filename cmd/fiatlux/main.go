@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -64,6 +66,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return cmdRun(args[1:], stdout, stderr)
 		case "replay":
 			return cmdReplay(args[1:], stdout, stderr)
+		case "step":
+			return cmdStep(args[1:], stdout, stderr)
 		case "help", "-h", "--help":
 			return printHelp(stdout)
 		case "-version", "--version", "version":
@@ -103,6 +107,13 @@ func printHelp(out io.Writer) error {
   fiatlux run [flags]           Launch the TUI.
   fiatlux replay --db <dsn> --world <name> [--replay-tick <duration>]
                                 Replay a saved world tick by tick.
+  fiatlux step --count N [flags]
+                                Run the sim headlessly for N steps and
+                                print a summary. No TUI, no /dev/tty
+                                required. Useful for CI smoke tests
+                                and benchmarks. Accepts the same brain
+                                / embedder / db / config flags as run,
+                                plus --json for machine-readable output.
 
 run flags:
   --world <name>      Name of the world to open or create.    (default: kosmos)
@@ -768,6 +779,157 @@ func cmdReplay(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	return nil
+}
+
+// stepSummary is the headless-mode output document.
+type stepSummary struct {
+	World              string         `json:"world"`
+	Ticks              uint64         `json:"ticks"`
+	Steps              int            `json:"steps"`
+	StepsSkipped       int            `json:"steps_skipped"`
+	EntitiesAlive      int            `json:"entities_alive"`
+	RelationshipsAlive int            `json:"relationships_alive"`
+	Agents             int            `json:"agents"`
+	Events             int            `json:"events"`
+	ToolErrors         int            `json:"tool_errors"`
+	ToolCounts         map[string]int `json:"tool_counts"`
+	ElapsedMS          int64          `json:"elapsed_ms"`
+}
+
+// cmdStep runs the sim headlessly for --count steps and prints a
+// summary. No TUI, no /dev/tty required.
+func cmdStep(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("fiatlux step", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	count := fs.Int("count", 1, "number of Step calls to perform")
+	worldName := fs.String("world", "kosmos", "name of the world to open or create")
+	dbPath := fs.String("db", "", "database DSN (empty = in-memory)")
+	brainSpec := fs.String("brain", "stub", "brain config; see 'fiatlux help'")
+	tickDelay := fs.Duration("tick", 0, "delay between steps (default: no delay)")
+	embedderSpec := fs.String("embedder", "zero", "memory embedder")
+	importanceSpec := fs.String("importance", "heuristic", "memory importance scorer")
+	reflectInterval := fs.Uint64("reflect-interval", 0, "ticks between reflection passes (0 = disable)")
+	maxAgents := fs.Int("max-agents", 8, "cap on total agents per world")
+	maxSpawnDepth := fs.Int("max-spawn-depth", 3, "cap on the spawn graph height")
+	jsonOut := fs.Bool("json", false, "emit summary as JSON instead of human-readable text")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *count <= 0 {
+		return fmt.Errorf("step: --count must be > 0 (got %d)", *count)
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	var (
+		st     tui.Storer
+		closer io.Closer
+	)
+	if *dbPath != "" {
+		s, err := store.Open(ctx, *dbPath)
+		if err != nil {
+			return fmt.Errorf("open store: %w", err)
+		}
+		st = s
+		closer = s
+	}
+	if closer != nil {
+		defer func() { _ = closer.Close() }()
+	}
+
+	w, err := loadOrNewWorld(ctx, st, *worldName)
+	if err != nil {
+		return err
+	}
+
+	embedder, err := buildEmbedder(*embedderSpec)
+	if err != nil {
+		return fmt.Errorf("build embedder: %w", err)
+	}
+	s, err := buildSim(w, *brainSpec, embedder, *importanceSpec, *reflectInterval, *maxAgents, *maxSpawnDepth)
+	if err != nil {
+		return fmt.Errorf("build sim: %w", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	summary := stepSummary{ToolCounts: map[string]int{}}
+	start := time.Now()
+	for i := 0; i < *count; i++ {
+		if ctx.Err() != nil {
+			break
+		}
+		res, err := s.Step(ctx)
+		if err != nil {
+			return fmt.Errorf("step %d: %w", i, err)
+		}
+		summary.Steps++
+		if res.Skipped {
+			summary.StepsSkipped++
+		}
+		if res.ToolName != "" {
+			summary.ToolCounts[res.ToolName]++
+		}
+		if res.ToolErr != nil {
+			summary.ToolErrors++
+		}
+		if *tickDelay > 0 && i+1 < *count {
+			select {
+			case <-ctx.Done():
+			case <-time.After(*tickDelay):
+			}
+		}
+	}
+	summary.ElapsedMS = time.Since(start).Milliseconds()
+	summary.Ticks = uint64(w.Tick())
+	summary.EntitiesAlive = w.EntityCount()
+	summary.RelationshipsAlive = w.RelationshipCount()
+	summary.Agents = len(s.Agents())
+	summary.Events = len(w.Events())
+	summary.World = w.Name()
+
+	// Save before reporting if a store is attached - users running
+	// headless probably want their work persisted.
+	if st != nil {
+		if err := st.Save(ctx, w); err != nil {
+			return fmt.Errorf("save: %w", err)
+		}
+	}
+
+	if *jsonOut {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(summary)
+	}
+	return writeHumanSummary(stdout, summary)
+}
+
+func writeHumanSummary(w io.Writer, s stepSummary) error {
+	lines := []string{
+		fmt.Sprintf("world:                %s", s.World),
+		fmt.Sprintf("ticks:                %d", s.Ticks),
+		fmt.Sprintf("steps:                %d", s.Steps),
+		fmt.Sprintf("steps_skipped:        %d", s.StepsSkipped),
+		fmt.Sprintf("entities_alive:       %d", s.EntitiesAlive),
+		fmt.Sprintf("relationships_alive:  %d", s.RelationshipsAlive),
+		fmt.Sprintf("agents:               %d", s.Agents),
+		fmt.Sprintf("events:               %d", s.Events),
+		fmt.Sprintf("tool_errors:          %d", s.ToolErrors),
+		fmt.Sprintf("elapsed_ms:           %d", s.ElapsedMS),
+	}
+	if len(s.ToolCounts) > 0 {
+		lines = append(lines, "tool_counts:")
+		names := make([]string, 0, len(s.ToolCounts))
+		for n := range s.ToolCounts {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			lines = append(lines, fmt.Sprintf("  %-16s %d", n+":", s.ToolCounts[n]))
+		}
+	}
+	_, err := fmt.Fprintln(w, strings.Join(lines, "\n"))
+	return err
 }
 
 // replayAdapter wraps a *sim.Replay so the TUI can consume it via

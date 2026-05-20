@@ -104,6 +104,24 @@ web:
 The replay is byte-exact: world events are recorded verbatim, so
 state rebuilds the same way it did originally.
 
+## Headless mode
+
+Run the sim without the TUI for CI smoke tests, benchmarks, or
+scripted scenarios. Useful when there's no `/dev/tty` (containers,
+CI runners) or when you just want stats.
+
+```bash
+# Run 50 stub-brain steps and print a JSON summary.
+./fiatlux step --count 50 --brain stub --json
+
+# Human-readable, with a saved DB and reflection.
+./fiatlux step --count 200 --brain stub --db ./bench.db --reflect-interval 20
+```
+
+The summary reports tick count, entity / relationship / agent
+counts, tool-call counts, and elapsed time. A non-empty `--db`
+triggers a final save so the run is reloadable.
+
 ## Remote database (libSQL)
 
 The same `--db` flag accepts libSQL URLs, so a kosmos can live on a

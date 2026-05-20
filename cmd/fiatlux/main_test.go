@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -135,4 +136,53 @@ func TestRunUnknownSubcommand(t *testing.T) {
 		return
 	}
 	_ = errors.Unwrap(err)
+}
+
+func TestCmdStep_JSON(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	err := run([]string{"step", "--count", "8", "--brain", "stub:42", "--json"}, &out, io.Discard)
+	if err != nil {
+		t.Fatalf("step --json: %v", err)
+	}
+	var summary stepSummary
+	if err := json.Unmarshal(out.Bytes(), &summary); err != nil {
+		t.Fatalf("decode summary: %v\n--- got ---\n%s", err, out.String())
+	}
+	if summary.World != "kosmos" {
+		t.Errorf("World = %q, want kosmos", summary.World)
+	}
+	if summary.Steps != 8 {
+		t.Errorf("Steps = %d, want 8", summary.Steps)
+	}
+	if summary.EntitiesAlive == 0 {
+		t.Errorf("EntitiesAlive = 0; stub brain should have created entities")
+	}
+	if summary.Ticks == 0 {
+		t.Errorf("Ticks = 0; expected at least one tick advance")
+	}
+}
+
+func TestCmdStep_Human(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	err := run([]string{"step", "--count", "4", "--brain", "stub:7"}, &out, io.Discard)
+	if err != nil {
+		t.Fatalf("step (human): %v", err)
+	}
+	body := out.String()
+	for _, want := range []string{"world:", "ticks:", "steps:", "entities_alive:", "tool_counts:"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("output missing %q\n--- got ---\n%s", want, body)
+		}
+	}
+}
+
+func TestCmdStep_RejectsZeroCount(t *testing.T) {
+	t.Parallel()
+	var stderr bytes.Buffer
+	err := run([]string{"step", "--count", "0"}, io.Discard, &stderr)
+	if err == nil {
+		t.Errorf("expected error for --count 0")
+	}
 }
