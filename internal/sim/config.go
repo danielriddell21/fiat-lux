@@ -25,6 +25,11 @@ type Config struct {
 	// non-empty the CLI starts an HTTP server at that address alongside
 	// the TUI. The --web-addr CLI flag takes precedence when both set.
 	Web WebConfig `yaml:"web,omitempty"`
+
+	// Save configures persistence cadence. Empty / "manual" means the
+	// user presses 's' to save (legacy behaviour). The --save-mode CLI
+	// flag takes precedence when both set.
+	Save SaveConfig `yaml:"save,omitempty"`
 }
 
 // WebConfig is the YAML form of the web viewer options.
@@ -32,6 +37,14 @@ type WebConfig struct {
 	// Addr is the listen address, e.g. ":8080" or "127.0.0.1:8080".
 	// Empty disables the web viewer.
 	Addr string `yaml:"addr,omitempty"`
+}
+
+// SaveConfig controls how frequently the world is persisted.
+type SaveConfig struct {
+	// Mode is parsed by store.ParseSaveMode. Accepted forms:
+	//   "" / "manual"         - user-triggered save only (default)
+	//   "interval:<duration>" - periodic background save, e.g. "30s"
+	Mode string `yaml:"mode,omitempty"`
 }
 
 // WorldConfig is one world's spec.

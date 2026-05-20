@@ -16,23 +16,37 @@ import (
 // name exists in the database.
 var ErrWorldNotFound = errors.New("store: world not found")
 
-// Store persists worlds to SQLite. It is an event-sourced store: a
-// world's full state is reconstructed by replaying its events
-// through world.ApplyEventForLoad.
+// Store persists worlds to a SQLite-compatible database. It is
+// event-sourced: a world's full state is reconstructed by replaying
+// its events through world.ApplyEventForLoad. The same code path
+// drives both local SQLite (modernc.org/sqlite) and remote libSQL
+// (Turso / self-hosted sqld) - the DSN scheme picks the driver.
 type Store struct {
 	db *sql.DB
 }
 
-// Open opens (or creates) a SQLite database at the given path and
-// applies the schema. Use ":memory:" for an in-memory database.
-func Open(ctx context.Context, path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+// Open opens (or creates) a database at the given DSN and applies
+// the schema. Accepted forms:
+//
+//	./kosmos.db, /abs/path.db   - local SQLite file
+//	:memory:                     - local in-memory SQLite
+//	file:./foo.db?_journal=WAL   - SQLite file URI
+//	sqlite://./foo.db            - explicit sqlite scheme
+//	libsql://<host>?authToken=.. - remote libSQL (Turso etc.)
+//	http(s)://<host>:<port>      - self-hosted sqld
+//	ws(s)://<host>:<port>        - self-hosted sqld over websocket
+func Open(ctx context.Context, dsn string) (*Store, error) {
+	driver, dsn, err := resolveDSN(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store: open: %w", err)
 	}
+	db, err := sql.Open(driver, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("store: open (%s): %w", driver, err)
+	}
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("store: apply schema: %w", err)
+		return nil, fmt.Errorf("store: apply schema (%s): %w", driver, err)
 	}
 	return &Store{db: db}, nil
 }

@@ -94,9 +94,50 @@ web:
 # Run, saving to disk; press `s` to checkpoint.
 ./fiatlux run --db ./kosmos.db
 
+# Autosave every 30 seconds instead of pressing 's':
+./fiatlux run --db ./kosmos.db --save-mode interval:30s
+
 # Later, replay tick by tick.
 ./fiatlux replay --db ./kosmos.db --world kosmos --replay-tick 80ms
 ```
 
 The replay is byte-exact: world events are recorded verbatim, so
 state rebuilds the same way it did originally.
+
+## Remote database (libSQL)
+
+The same `--db` flag accepts libSQL URLs, so a kosmos can live on a
+server instead of a local file. Schema and behaviour are identical;
+the only thing that changes is the driver.
+
+### Hosted: Turso
+
+Sign up at [turso.tech](https://turso.tech), create a database, and
+grab the URL + auth token. Then:
+
+```bash
+./fiatlux run \
+  --db 'libsql://my-kosmos.turso.io?authToken=eyJhbGc...' \
+  --save-mode interval:30s
+```
+
+### Self-hosted: sqld
+
+Run the libSQL server yourself:
+
+```bash
+docker run -d --name sqld \
+  -p 8080:8080 -v $PWD/sqld-data:/var/lib/sqld \
+  ghcr.io/tursodatabase/libsql-server
+
+./fiatlux run --db 'http://localhost:8080' --save-mode interval:10s
+```
+
+`sqld` is a single binary if you'd rather not use Docker — see the
+[upstream README](https://github.com/tursodatabase/libsql/tree/main/libsql-server).
+
+### Local libSQL file
+
+If you want the libSQL client without a server (e.g. to test the
+remote code path locally), pass a `libsql://` URL pointing at a
+sqld instance you've started locally.

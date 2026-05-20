@@ -101,12 +101,17 @@ func printHelp(out io.Writer) error {
   fiatlux                       Print banner and version.
   fiatlux -version              Print version.
   fiatlux run [flags]           Launch the TUI.
-  fiatlux replay --db <path> --world <name> [--replay-tick <duration>]
+  fiatlux replay --db <dsn> --world <name> [--replay-tick <duration>]
                                 Replay a saved world tick by tick.
 
 run flags:
   --world <name>      Name of the world to open or create.    (default: kosmos)
-  --db <path>         SQLite database path for persistence.   (default: in-memory)
+  --db <dsn>          Database DSN. Empty = in-memory, no persistence.
+                      Local file:    ./kosmos.db, /abs/foo.db, :memory:
+                      Local URI:     file:./foo.db?_journal_mode=WAL
+                      libSQL remote: libsql://<host>?authToken=...
+                                     http(s)://<sqld-host>:<port>
+                                     ws(s)://<host>?authToken=...
   --brain <spec>      Brain config. Supported:
                         stub                        random valid tool calls (default; free)
                         stub:<seed>                 deterministic stub
@@ -133,7 +138,13 @@ run flags:
   --web-addr <addr>   Bind the embedded web viewer at this address
                       (e.g. 127.0.0.1:8080). Empty = disabled.
                       Also configurable via the YAML config's
-                      'web.addr' key; the flag wins when both set.`)
+                      'web.addr' key; the flag wins when both set.
+  --save-mode <mode>  Persistence cadence. Requires --db.
+                        manual              user presses 's' (default)
+                        interval:<dur>      periodic background save,
+                                            e.g. interval:30s
+                      Also configurable via YAML 'save.mode'; the
+                      flag wins when both set.`)
 	return err
 }
 
@@ -151,6 +162,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	maxSpawnDepth := fs.Int("max-spawn-depth", 3, "cap on the spawn graph height")
 	configPath := fs.String("config", "", "YAML config for a multi-world universe (overrides --brain)")
 	webAddr := fs.String("web-addr", "", "address to bind the optional web viewer (e.g. 127.0.0.1:8080)")
+	saveMode := fs.String("save-mode", "", "persistence cadence: manual | interval:<duration> (e.g. interval:30s)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -180,10 +192,11 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	}
 
 	var (
-		stepper      tui.Stepper
-		simProvider  webui.SimProvider
-		yamlWebAddr  string
-		attachOnSims []*sim.Sim // sims whose Observer the webui will subscribe to
+		stepper       tui.Stepper
+		simProvider   webui.SimProvider
+		yamlWebAddr   string
+		yamlSaveMode  string
+		attachOnSims  []*sim.Sim // sims whose Observer the webui will subscribe to
 	)
 	switch {
 	case *configPath != "":
@@ -204,6 +217,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		attachOnSims = u.Sims()
 		if cfg != nil {
 			yamlWebAddr = cfg.Web.Addr
+			yamlSaveMode = cfg.Save.Mode
 		}
 	case *brainSpec != "none":
 		embedder, err := buildEmbedder(*embedderSpec)
@@ -231,6 +245,30 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		defer stop()
+	}
+
+	// Resolve the save mode: CLI flag wins, then YAML config.
+	resolvedSaveMode := *saveMode
+	if resolvedSaveMode == "" {
+		resolvedSaveMode = yamlSaveMode
+	}
+	mode, err := store.ParseSaveMode(resolvedSaveMode)
+	if err != nil {
+		return err
+	}
+	if mode.Kind == "interval" {
+		concreteStore, ok := st.(store.Saver)
+		if !ok || concreteStore == nil {
+			return fmt.Errorf("save-mode interval requires --db; no store attached")
+		}
+		go func() {
+			err := store.RunAutosave(ctx, concreteStore, w, mode.Interval, func(saveErr error) {
+				fmt.Fprintln(stderr, "autosave:", saveErr)
+			})
+			if err != nil && !errors.Is(err, context.Canceled) {
+				fmt.Fprintln(stderr, "autosave:", err)
+			}
+		}()
 	}
 
 	if err := tui.Run(ctx, tui.RunOptions{
@@ -686,7 +724,7 @@ func loadUniverse(ctx context.Context, path string, embedder memory.Embedder) (*
 func cmdReplay(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("fiatlux replay", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dbPath := fs.String("db", "", "SQLite database path (required)")
+	dbPath := fs.String("db", "", "database DSN (required; accepts local files and libsql URLs)")
 	worldName := fs.String("world", "kosmos", "name of the world to replay")
 	replayTick := fs.Duration("replay-tick", 100*time.Millisecond, "delay between replayed events")
 	if err := fs.Parse(args); err != nil {

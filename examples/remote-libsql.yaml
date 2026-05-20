@@ -1,0 +1,34 @@
+# Remote libSQL setup. Either point --db at a Turso URL or a
+# self-hosted sqld instance:
+#
+#   fiatlux run --config examples/remote-libsql.yaml \
+#     --db 'libsql://<your-db>.turso.io?authToken=<your-token>'
+#
+#   # or, self-hosted via Docker:
+#   docker run -d -p 8080:8080 ghcr.io/tursodatabase/libsql-server
+#   fiatlux run --config examples/remote-libsql.yaml \
+#     --db 'http://localhost:8080'
+
+worlds:
+  - name: kosmos
+    agent:
+      name: the creator
+      system_prompt: |
+        You exist. The world is empty. You have tools to create.
+        What you make is entirely your choice. Be brief - issue at most
+        one tool call per turn with a short justification.
+      brain:
+        provider: stub
+
+reflect_interval: 20
+max_agents: 8
+max_spawn_depth: 3
+
+# Periodic autosave so the remote DB stays in sync without the
+# operator having to remember to press 's'.
+save:
+  mode: interval:30s
+
+# Uncomment to also expose the embedded web viewer locally:
+# web:
+#   addr: 127.0.0.1:8080
