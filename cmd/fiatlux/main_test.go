@@ -4,9 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/danielriddell21/fiat-lux/internal/memory"
 	"github.com/danielriddell21/fiat-lux/internal/sim"
@@ -49,7 +54,7 @@ func TestRunHelp(t *testing.T) {
 		t.Fatalf("run help: %v", err)
 	}
 	got := buf.String()
-	for _, want := range []string{"Usage", "fiatlux run", "--world", "--db", "--save-mode", "--web-addr", "libsql://"} {
+	for _, want := range []string{"Usage", "fiatlux run", "fiatlux serve", "--world", "--db", "--save-mode", "--web-addr", "libsql://"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("help missing %q\n--- got ---\n%s", want, got)
 		}
@@ -185,4 +190,78 @@ func TestCmdStep_RejectsZeroCount(t *testing.T) {
 	if err == nil {
 		t.Errorf("expected error for --count 0")
 	}
+}
+
+func TestCmdServe_BootsWebServer(t *testing.T) {
+	// Not parallel: cmdServe registers a SIGINT handler via
+	// signal.NotifyContext, and we send SIGINT to ourselves to trigger
+	// graceful shutdown. Running this in parallel with another test
+	// doing the same could lead to flakes.
+
+	addr, err := pickFreeAddr()
+	if err != nil {
+		t.Fatalf("pickFreeAddr: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- run([]string{
+			"serve",
+			"--brain", "stub:42",
+			"--tick", "50ms",
+			"--web-addr", addr,
+		}, io.Discard, io.Discard)
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	url := "http://" + addr + "/api/state"
+	var lastErr error
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(url)
+		if err != nil {
+			lastErr = err
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			lastErr = nil
+			break
+		}
+		lastErr = fmt.Errorf("status %d", resp.StatusCode)
+		time.Sleep(50 * time.Millisecond)
+	}
+	if lastErr != nil {
+		_ = syscall.Kill(syscall.Getpid(), syscall.SIGINT)
+		<-done
+		t.Fatalf("web server never came up: %v", lastErr)
+	}
+
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatalf("send SIGINT: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("cmdServe returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cmdServe did not exit within 5s of SIGINT")
+	}
+}
+
+// pickFreeAddr returns 127.0.0.1:<random-free-port>. There is a small
+// race window between when we close this listener and when cmdServe
+// rebinds, but it's acceptable for a single test.
+func pickFreeAddr() (string, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	addr := l.Addr().String()
+	if err := l.Close(); err != nil {
+		return "", err
+	}
+	return addr, nil
 }

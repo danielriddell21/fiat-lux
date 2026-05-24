@@ -68,6 +68,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return cmdReplay(args[1:], stdout, stderr)
 		case "step":
 			return cmdStep(args[1:], stdout, stderr)
+		case "serve":
+			return cmdServe(args[1:], stdout, stderr)
 		case "help", "-h", "--help":
 			return printHelp(stdout)
 		case "-version", "--version", "version":
@@ -95,7 +97,7 @@ func printBanner(args []string, out io.Writer) error {
 	if _, err := fmt.Fprintf(out, "\n  version: %s\n", version); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintln(out, "  try 'fiatlux run' to launch the TUI, or 'fiatlux help' for options.")
+	_, err := fmt.Fprintln(out, "  try 'fiatlux run' for the TUI, 'fiatlux serve' for the web viewer, or 'fiatlux help' for options.")
 	return err
 }
 
@@ -114,6 +116,11 @@ func printHelp(out io.Writer) error {
                                 and benchmarks. Accepts the same brain
                                 / embedder / db / config flags as run,
                                 plus --json for machine-readable output.
+  fiatlux serve [flags]         Run the sim headlessly with the embedded
+                                web viewer attached. No TUI. Suitable for
+                                container deployments. Accepts the same
+                                flags as run; --web-addr defaults to
+                                :8080.
 
 run flags:
   --world <name>      Name of the world to open or create.    (default: kosmos)
@@ -985,6 +992,178 @@ func cmdStep(args []string, stdout, stderr io.Writer) error {
 		return enc.Encode(summary)
 	}
 	return writeHumanSummary(stdout, summary)
+}
+
+// stepper is the minimal interface implemented by both *sim.Sim and
+// *sim.Universe. cmdServe loops over it without depending on the
+// tui.Stepper adapter pair.
+type stepper interface {
+	Step(ctx context.Context) (sim.StepResult, error)
+}
+
+// cmdServe runs the sim headlessly with the embedded web viewer
+// attached. No TUI, no /dev/tty - this is the deployment-friendly
+// entrypoint that fits in a container behind a Cloudflare Tunnel.
+func cmdServe(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("fiatlux serve", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	worldName := fs.String("world", "kosmos", "name of the world to open or create")
+	dbPath := fs.String("db", "", "database DSN (empty = in-memory, no persistence)")
+	brainSpec := fs.String("brain", "stub", "brain config; see 'fiatlux help'")
+	tickInterval := fs.Duration("tick", tui.DefaultTickInterval, "sim tick interval")
+	embedderSpec := fs.String("embedder", "zero", "memory embedder (zero | hash | ollama[:model] | openai[:model])")
+	importanceSpec := fs.String("importance", "heuristic", "memory importance scorer (heuristic | llm)")
+	reflectInterval := fs.Uint64("reflect-interval", 20, "ticks between reflection passes (0 = disable)")
+	maxAgents := fs.Int("max-agents", 8, "cap on total agents per world")
+	maxSpawnDepth := fs.Int("max-spawn-depth", 3, "cap on the spawn graph height")
+	configPath := fs.String("config", "", "YAML config for a multi-world universe (overrides --brain)")
+	webAddr := fs.String("web-addr", ":8080", "address to bind the embedded web viewer (e.g. :8080 or 127.0.0.1:8080)")
+	saveMode := fs.String("save-mode", "", "persistence cadence: manual | interval:<duration> (e.g. interval:30s)")
+	_ = stdout
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	var (
+		st     tui.Storer
+		closer io.Closer
+	)
+	if *dbPath != "" {
+		s, err := store.Open(ctx, *dbPath)
+		if err != nil {
+			return fmt.Errorf("open store: %w", err)
+		}
+		st = s
+		closer = s
+	}
+	if closer != nil {
+		defer func() { _ = closer.Close() }()
+	}
+
+	w, err := loadOrNewWorld(ctx, st, *worldName)
+	if err != nil {
+		return err
+	}
+
+	var (
+		loop         stepper
+		simProvider  webui.SimProvider
+		yamlWebAddr  string
+		yamlSaveMode string
+		attachOnSims []*sim.Sim
+		simForWorld  func(name string) *sim.Sim
+	)
+	switch {
+	case *configPath != "":
+		embedder, err := buildEmbedder(*embedderSpec)
+		if err != nil {
+			return fmt.Errorf("build embedder: %w", err)
+		}
+		u, cfg, err := loadUniverse(ctx, *configPath, embedder)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = u.Close() }()
+		w = u.Focused().World
+		loop = u
+		simProvider = func() *sim.Sim { return u.Focused() }
+		attachOnSims = u.Sims()
+		simForWorld = simByName(u.Sims())
+		if dbStore, ok := st.(*store.Store); ok {
+			for _, s := range u.Sims() {
+				restoreRootMemory(ctx, dbStore, s)
+			}
+		}
+		if cfg != nil {
+			yamlWebAddr = cfg.Web.Addr
+			yamlSaveMode = cfg.Save.Mode
+		}
+	case *brainSpec != "none":
+		embedder, err := buildEmbedder(*embedderSpec)
+		if err != nil {
+			return fmt.Errorf("build embedder: %w", err)
+		}
+		s, err := buildSim(w, *brainSpec, embedder, *importanceSpec, *reflectInterval, *maxAgents, *maxSpawnDepth)
+		if err != nil {
+			return fmt.Errorf("build sim: %w", err)
+		}
+		defer func() { _ = s.Close() }()
+		loop = s
+		simProvider = func() *sim.Sim { return s }
+		attachOnSims = []*sim.Sim{s}
+		simForWorld = simByName([]*sim.Sim{s})
+		if dbStore, ok := st.(*store.Store); ok {
+			restoreRootMemory(ctx, dbStore, s)
+		}
+	default:
+		return errors.New("serve: --brain=none is not supported (web viewer needs a sim to render)")
+	}
+
+	if dbStore, ok := st.(*store.Store); ok && simForWorld != nil {
+		st = &fullSaver{store: dbStore, simForWorld: simForWorld}
+	}
+
+	resolvedWebAddr := *webAddr
+	if resolvedWebAddr == "" {
+		resolvedWebAddr = yamlWebAddr
+	}
+	if resolvedWebAddr == "" {
+		return errors.New("serve: --web-addr is required (set the flag or YAML 'web.addr')")
+	}
+	stop, err := startWebUI(ctx, resolvedWebAddr, simProvider, attachOnSims, stderr)
+	if err != nil {
+		return err
+	}
+	defer stop()
+
+	resolvedSaveMode := *saveMode
+	if resolvedSaveMode == "" {
+		resolvedSaveMode = yamlSaveMode
+	}
+	mode, err := store.ParseSaveMode(resolvedSaveMode)
+	if err != nil {
+		return err
+	}
+	if mode.Kind == "interval" {
+		concreteStore, ok := st.(store.Saver)
+		if !ok || concreteStore == nil {
+			return fmt.Errorf("save-mode interval requires --db; no store attached")
+		}
+		go func() {
+			err := store.RunAutosave(ctx, concreteStore, w, mode.Interval, func(saveErr error) {
+				fmt.Fprintln(stderr, "autosave:", saveErr)
+			})
+			if err != nil && !errors.Is(err, context.Canceled) {
+				fmt.Fprintln(stderr, "autosave:", err)
+			}
+		}()
+	}
+
+	ticker := time.NewTicker(*tickInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			// Best-effort final save so the work that's accumulated
+			// since the last autosave persists. Use a fresh context
+			// because the signal context is already done.
+			if st != nil {
+				saveCtx, cancelSave := context.WithTimeout(context.Background(), 5*time.Second)
+				if err := st.Save(saveCtx, w); err != nil {
+					fmt.Fprintln(stderr, "final save:", err)
+				}
+				cancelSave()
+			}
+			return nil
+		case <-ticker.C:
+			if _, err := loop.Step(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				fmt.Fprintln(stderr, "step:", err)
+			}
+		}
+	}
 }
 
 func writeHumanSummary(w io.Writer, s stepSummary) error {

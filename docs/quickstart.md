@@ -112,6 +112,26 @@ sessions: thoughts, actions, outcomes, and reflections from prior
 runs come back when you re-open the same world. Spawned-agent memory
 is session-scoped for now.
 
+## Serve mode (web-only, no TUI)
+
+For container deployments behind a reverse proxy or tunnel, run the
+sim with just the embedded web viewer attached. No `/dev/tty`, no
+TUI. `--web-addr` defaults to `:8080`.
+
+```bash
+# Solo agent on the stub brain, viewer on :8080.
+./fiatlux serve --brain stub --tick 2s
+
+# Multi-world from YAML, with an Ollama brain and a remote sqld.
+./fiatlux serve \
+  --config examples/local-qwen.yaml \
+  --db 'http://sqld-svc:8080' \
+  --save-mode interval:30s
+```
+
+A best-effort final save runs on `SIGINT`/`SIGTERM` so the work
+accumulated since the last autosave persists.
+
 ## Headless mode
 
 Run the sim without the TUI for CI smoke tests, benchmarks, or
