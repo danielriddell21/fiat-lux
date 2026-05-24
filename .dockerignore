@@ -1,0 +1,16 @@
+.git
+.github
+.golangci.yml
+.dockerignore
+.goreleaser.yaml
+Justfile
+LICENSE
+*.md
+docs
+examples
+coverage.txt
+coverage.html
+fiatlux
+*.db
+*.db-journal
+dist

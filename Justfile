@@ -18,6 +18,22 @@ build:
 run *args:
     go run {{cmd}} {{args}}
 
+# Headless web-only mode (no TUI). Pass extra flags after the recipe name.
+serve *args:
+    go run {{cmd}} serve {{args}}
+
+# Local container build via the dev Dockerfile.
+image:
+    docker build -t fiatlux:dev .
+
+# GoReleaser dry-run: builds binaries + images locally, no push.
+release-snapshot:
+    goreleaser release --snapshot --clean --skip=announce,validate
+
+# GoReleaser config validation.
+release-check:
+    goreleaser check
+
 # Race-enabled unit tests, no cache.
 test:
     go test -race -count=1 ./...

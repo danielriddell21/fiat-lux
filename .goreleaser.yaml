@@ -1,0 +1,91 @@
+version: 2
+
+project_name: fiatlux
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: fiatlux
+    binary: fiatlux
+    main: ./cmd/fiatlux
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_
+      {{- if eq .Os "darwin" }}macos
+      {{- else }}{{ .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot+{{ .ShortCommit }}"
+
+dockers:
+  - id: amd64
+    use: buildx
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile.goreleaser
+    image_templates:
+      - "ghcr.io/danielriddell21/fiat-lux:{{ .Version }}-amd64"
+      - "ghcr.io/danielriddell21/fiat-lux:latest-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.source=https://github.com/danielriddell21/fiat-lux"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+  - id: arm64
+    use: buildx
+    goos: linux
+    goarch: arm64
+    dockerfile: Dockerfile.goreleaser
+    image_templates:
+      - "ghcr.io/danielriddell21/fiat-lux:{{ .Version }}-arm64"
+      - "ghcr.io/danielriddell21/fiat-lux:latest-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.source=https://github.com/danielriddell21/fiat-lux"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+
+docker_manifests:
+  - name_template: "ghcr.io/danielriddell21/fiat-lux:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/danielriddell21/fiat-lux:{{ .Version }}-amd64"
+      - "ghcr.io/danielriddell21/fiat-lux:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/danielriddell21/fiat-lux:latest"
+    image_templates:
+      - "ghcr.io/danielriddell21/fiat-lux:latest-amd64"
+      - "ghcr.io/danielriddell21/fiat-lux:latest-arm64"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^test:"
