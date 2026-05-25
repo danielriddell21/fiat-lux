@@ -28,13 +28,14 @@ func TestDefaultRegistry_HasAllNamedTools(t *testing.T) {
 		"Create", "Modify", "Destroy", "Relate", "Unrelate",
 		"Observe", "Reflect", "SpawnAgent", "Speak", "Wait",
 		"FindByType", "FindByProperty", "FindRelated",
+		"Zoom", "Unzoom",
 	} {
 		if _, ok := reg.Get(name); !ok {
 			t.Errorf("registry missing tool %q", name)
 		}
 	}
-	if got := len(reg.All()); got != 13 {
-		t.Errorf("registry size = %d, want 13", got)
+	if got := len(reg.All()); got != 15 {
+		t.Errorf("registry size = %d, want 15", got)
 	}
 }
 
@@ -438,6 +439,67 @@ func TestFindRelated_RequiresEntityID(t *testing.T) {
 	w := mustWorld(t)
 	if _, err := FindRelated().Apply(w, 1, json.RawMessage(`{"entity_id":0}`)); err == nil {
 		t.Errorf("expected error for entity_id=0")
+	}
+}
+
+func TestZoom_ApplyStubMessage(t *testing.T) {
+	t.Parallel()
+	w := mustWorld(t)
+	out, err := Zoom().Apply(w, 1, json.RawMessage(`{"entity_id":42}`))
+	if err != nil {
+		t.Fatalf("Zoom.Apply: %v", err)
+	}
+	if !contains(out, "sim layer") {
+		t.Errorf("Zoom.Apply result = %q, want sim-layer hint", out)
+	}
+	if _, err := Zoom().Apply(w, 1, json.RawMessage(`{"entity_id":0}`)); err == nil {
+		t.Errorf("expected error for entity_id=0")
+	}
+}
+
+func TestZoom_RandomArgs_SkipsWhenNoContainers(t *testing.T) {
+	t.Parallel()
+	rng := newRng()
+	// Empty world.
+	if _, ok := Zoom().RandomArgs(rng, brain.Perception{}); ok {
+		t.Errorf("Zoom.RandomArgs returned true on empty world")
+	}
+	// Entities present but no containment edges.
+	p := brain.Perception{
+		AliveEntities: []brain.EntityView{
+			{ID: 1, TypeLabel: "planet"},
+			{ID: 2, TypeLabel: "ocean"},
+		},
+	}
+	if _, ok := Zoom().RandomArgs(rng, p); ok {
+		t.Errorf("Zoom.RandomArgs returned true with no containment edges")
+	}
+	// One container should be enough.
+	p.AliveRelationships = []brain.RelationshipView{
+		{ID: 1, From: 1, To: 2, Kind: "contains"},
+	}
+	args, ok := Zoom().RandomArgs(rng, p)
+	if !ok {
+		t.Fatalf("Zoom.RandomArgs returned false with a container present")
+	}
+	var got ZoomArgs
+	if err := json.Unmarshal(args, &got); err != nil {
+		t.Fatalf("decode args: %v", err)
+	}
+	if got.EntityID != 1 {
+		t.Errorf("EntityID = %d, want 1", got.EntityID)
+	}
+}
+
+func TestUnzoom_ApplyStubMessage(t *testing.T) {
+	t.Parallel()
+	w := mustWorld(t)
+	out, err := Unzoom().Apply(w, 1, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Unzoom.Apply: %v", err)
+	}
+	if !contains(out, "sim layer") {
+		t.Errorf("Unzoom.Apply result = %q, want sim-layer hint", out)
 	}
 }
 

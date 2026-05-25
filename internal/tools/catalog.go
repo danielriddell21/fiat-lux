@@ -12,10 +12,10 @@ import (
 
 // Default returns the full tool catalogue: Create, Modify,
 // Destroy, Relate, Unrelate, Observe, Reflect, SpawnAgent, Speak,
-// Wait, FindByType, FindByProperty, FindRelated. SpawnAgent and
-// Speak are intercepted by the sim layer (which has access to
-// per-world agent state); their Apply funcs are minimal stubs the
-// sim never invokes.
+// Wait, FindByType, FindByProperty, FindRelated, Zoom, Unzoom.
+// SpawnAgent, Speak, Zoom, and Unzoom are intercepted by the sim
+// layer (which has access to per-world or per-agent state); their
+// Apply funcs are minimal stubs the sim never invokes.
 func Default() *Registry {
 	return NewRegistry(
 		Create(),
@@ -31,6 +31,8 @@ func Default() *Registry {
 		FindByType(),
 		FindByProperty(),
 		FindRelated(),
+		Zoom(),
+		Unzoom(),
 	)
 }
 
@@ -503,6 +505,77 @@ func Wait() Tool {
 	}
 }
 
+// ---- Zoom -------------------------------------------------------------------
+
+// ZoomArgs is the public arg struct so the sim adapter can decode
+// the call before forwarding to per-agent focus state.
+type ZoomArgs struct {
+	EntityID uint64 `json:"entity_id"`
+	Turns    int    `json:"turns,omitempty"`
+}
+
+// Zoom pins a focus entity on the calling agent for N turns. The
+// agent's next perceptions include a FocusView with the focused
+// entity's "contains" sub-tree, so the brain can drill into one
+// region without being distracted by the global entity list.
+// Intercepted in the sim layer because Apply only mutates the
+// world; per-agent focus state lives on Agent.
+func Zoom() Tool {
+	return Tool{
+		Name:        "Zoom",
+		Description: "Pin focus on an entity for several turns. Perception will then include that entity's contains sub-tree so you can drill into it. The agent's global view is preserved.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"entity_id": map[string]any{"type": "integer", "description": "entity to focus on"},
+				"turns":     map[string]any{"type": "integer", "description": "turns to keep focus pinned; default 5, max 20"},
+			},
+			"required": []string{"entity_id"},
+		},
+		Apply: func(_ *world.World, _ world.AgentID, raw json.RawMessage) (string, error) {
+			var a ZoomArgs
+			if err := json.Unmarshal(raw, &a); err != nil {
+				return "", fmt.Errorf("Zoom: bad args: %w", err)
+			}
+			if a.EntityID == 0 {
+				return "", errors.New("Zoom: entity_id must be > 0")
+			}
+			return "(zoom requires the sim layer)", nil
+		},
+		RandomArgs: func(rng *rand.Rand, p brain.Perception) (json.RawMessage, bool) {
+			containers := containerEntities(p.AliveEntities, p.AliveRelationships)
+			if len(containers) == 0 {
+				return nil, false
+			}
+			id := containers[rng.IntN(len(containers))]
+			b, err := json.Marshal(ZoomArgs{EntityID: id, Turns: rng.IntN(5) + 3})
+			if err != nil {
+				return nil, false
+			}
+			return b, true
+		},
+	}
+}
+
+// ---- Unzoom -----------------------------------------------------------------
+
+// Unzoom releases the agent's current focus before its scheduled
+// expiry. Intercepted in the sim layer.
+func Unzoom() Tool {
+	return Tool{
+		Name:        "Unzoom",
+		Description: "Release the agent's current focus before its turns expire. No-op if no focus is set.",
+		Schema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Apply: func(_ *world.World, _ world.AgentID, _ json.RawMessage) (string, error) {
+			return "(unzoom requires the sim layer)", nil
+		},
+		RandomArgs: nil,
+	}
+}
+
 // ---- FindByType -------------------------------------------------------------
 
 type findByTypeArgs struct {
@@ -784,6 +857,53 @@ func nonAgentEntities(in []brain.EntityView) []brain.EntityView {
 		out = append(out, e)
 	}
 	return out
+}
+
+// containerEntities returns the EntityIDs of non-agent entities that
+// have at least one outgoing "contains" relationship. Used by
+// Zoom.RandomArgs so the stub brain pins focus only on entities the
+// frontier could actually drill into. Returns an empty slice when
+// the world has no containment structure yet.
+func containerEntities(ents []brain.EntityView, rels []brain.RelationshipView) []uint64 {
+	hasChild := make(map[uint64]bool, len(ents))
+	for _, r := range rels {
+		if !equalFoldASCII(r.Kind, "contains") {
+			continue
+		}
+		hasChild[r.From] = true
+	}
+	out := make([]uint64, 0, len(hasChild))
+	for _, e := range ents {
+		if e.TypeLabel == "agent" {
+			continue
+		}
+		if hasChild[e.ID] {
+			out = append(out, e.ID)
+		}
+	}
+	return out
+}
+
+// equalFoldASCII is a small case-insensitive comparison for ASCII
+// strings, avoiding pulling in the strings package just for one
+// call in a tools-internal helper.
+func equalFoldASCII(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		ca, cb := a[i], b[i]
+		if ca >= 'A' && ca <= 'Z' {
+			ca += 'a' - 'A'
+		}
+		if cb >= 'A' && cb <= 'Z' {
+			cb += 'a' - 'A'
+		}
+		if ca != cb {
+			return false
+		}
+	}
+	return true
 }
 
 var (

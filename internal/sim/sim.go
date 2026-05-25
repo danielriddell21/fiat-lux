@@ -404,15 +404,19 @@ func (s *Sim) stepAgent(ctx context.Context, ag *agent.Agent, rt *agentRuntime) 
 	return res, nil
 }
 
-// invokeTool dispatches the agent's chosen tool. SpawnAgent and
-// Speak are intercepted here because they need access to per-world
-// agent state the registry cannot reach.
+// invokeTool dispatches the agent's chosen tool. SpawnAgent, Speak,
+// Zoom, and Unzoom are intercepted here because they need access to
+// per-world or per-agent state the registry cannot reach.
 func (s *Sim) invokeTool(ctx context.Context, ag *agent.Agent, call brain.ToolCall, tick world.Tick) (string, error) {
 	switch call.Name {
 	case "SpawnAgent":
 		return s.handleSpawn(ctx, ag, call.Args)
 	case "Speak":
 		return s.handleSpeak(ag, call.Args, tick)
+	case "Zoom":
+		return s.handleZoom(ag, call.Args)
+	case "Unzoom":
+		return s.handleUnzoom(ag)
 	}
 	return ag.Tools.Invoke(call, s.World, ag.EntityID)
 }
@@ -522,6 +526,52 @@ func (s *Sim) handleSpeak(speaker *agent.Agent, raw json.RawMessage, tick world.
 		other.DeliverHeard(ev)
 	}
 	return fmt.Sprintf("spoke to %d listener(s): %s", len(others), a.Content), nil
+}
+
+// defaultZoomTurns is used when the agent requests Zoom without
+// supplying a turns argument. maxZoomTurns caps the value the agent
+// may request so a single Zoom can't monopolise focus indefinitely.
+const (
+	defaultZoomTurns = 5
+	maxZoomTurns     = 20
+)
+
+func (s *Sim) handleZoom(ag *agent.Agent, raw json.RawMessage) (string, error) {
+	var a tools.ZoomArgs
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return "", fmt.Errorf("Zoom: bad args: %w", err)
+	}
+	if a.EntityID == 0 {
+		return "", errors.New("Zoom: entity_id must be > 0")
+	}
+	id := world.EntityID(a.EntityID)
+	if id == ag.EntityID {
+		return "", errors.New("Zoom: cannot focus on yourself")
+	}
+	e, ok := s.World.Entity(id)
+	if !ok || !e.IsAlive() {
+		return "", fmt.Errorf("Zoom: entity #%d not alive", a.EntityID)
+	}
+	turns := a.Turns
+	if turns <= 0 {
+		turns = defaultZoomTurns
+	}
+	if turns > maxZoomTurns {
+		turns = maxZoomTurns
+	}
+	ag.Focus = id
+	ag.FocusTurnsLeft = turns
+	return fmt.Sprintf("focused on %s #%d for %d turns", e.TypeLabel, id, turns), nil
+}
+
+func (s *Sim) handleUnzoom(ag *agent.Agent) (string, error) {
+	if ag.Focus == 0 {
+		return "no focus to release", nil
+	}
+	prev := ag.Focus
+	ag.Focus = 0
+	ag.FocusTurnsLeft = 0
+	return fmt.Sprintf("released focus on #%d", prev), nil
 }
 
 func (s *Sim) shouldSkip(ag *agent.Agent, rt *agentRuntime) bool {
