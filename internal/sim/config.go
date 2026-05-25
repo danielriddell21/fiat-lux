@@ -120,20 +120,27 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// WorldLoader returns a pre-existing world by name. BuildUniverse
+// calls it for each configured world; nil or an error means the
+// universe falls back to creating a fresh world.
+type WorldLoader func(ctx context.Context, name string) (*world.World, error)
+
 // BuildUniverse turns a Config into a Universe by constructing one
 // Sim per world. The embedder is shared so all worlds use the same
-// embedding pipeline.
+// embedding pipeline. When loader is non-nil it is consulted first
+// for each world so saved state is preserved across runs.
 func (c *Config) BuildUniverse(
 	ctx context.Context,
 	factory BrainFactory,
 	embedder memory.Embedder,
+	loader WorldLoader,
 ) (*Universe, error) {
 	if factory == nil {
 		return nil, errors.New("sim: BuildUniverse requires a BrainFactory")
 	}
 	sims := make([]*Sim, 0, len(c.Worlds))
 	for _, wc := range c.Worlds {
-		w, err := world.New(wc.Name)
+		w, err := loadOrNew(ctx, loader, wc.Name)
 		if err != nil {
 			closeAll(sims)
 			return nil, fmt.Errorf("sim: world %q: %w", wc.Name, err)
@@ -163,6 +170,22 @@ func (c *Config) BuildUniverse(
 		sims = append(sims, s)
 	}
 	return NewUniverse(sims)
+}
+
+// loadOrNew consults the loader for a saved world; falls back to a
+// fresh empty world when no loader is supplied or the lookup yields
+// no result. Any non-nil error from the loader is returned verbatim.
+func loadOrNew(ctx context.Context, loader WorldLoader, name string) (*world.World, error) {
+	if loader != nil {
+		w, err := loader(ctx, name)
+		if err == nil && w != nil {
+			return w, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return world.New(name)
 }
 
 func closeAll(sims []*Sim) {

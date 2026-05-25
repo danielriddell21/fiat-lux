@@ -223,7 +223,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("build embedder: %w", err)
 		}
-		u, cfg, err := loadUniverse(ctx, *configPath, embedder)
+		u, cfg, err := loadUniverse(ctx, *configPath, embedder, st)
 		if err != nil {
 			return err
 		}
@@ -789,9 +789,11 @@ func (a *universeAdapter) MemorySnapshot() tui.MemorySnapshot {
 }
 
 // loadUniverse opens the YAML config and builds a Universe from it.
-// Also returns the parsed Config so callers can read top-level
-// settings (e.g. Web.Addr) that aren't part of the Universe itself.
-func loadUniverse(ctx context.Context, path string, embedder memory.Embedder) (*sim.Universe, *sim.Config, error) {
+// When st implements the world-loader contract, each configured
+// world is restored from the store before the sim is wired so prior
+// state survives a restart. Also returns the parsed Config so
+// callers can read top-level settings (e.g. Web.Addr).
+func loadUniverse(ctx context.Context, path string, embedder memory.Embedder, st tui.Storer) (*sim.Universe, *sim.Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open config: %w", err)
@@ -804,11 +806,35 @@ func loadUniverse(ctx context.Context, path string, embedder memory.Embedder) (*
 	factory := func(_ context.Context, spec string) (brain.Brain, error) {
 		return buildBrain(spec)
 	}
-	u, err := cfg.BuildUniverse(ctx, factory, embedder)
+	loader := storeWorldLoader(st)
+	u, err := cfg.BuildUniverse(ctx, factory, embedder, loader)
 	if err != nil {
 		return nil, nil, err
 	}
 	return u, cfg, nil
+}
+
+// storeWorldLoader adapts a tui.Storer that also implements Load into
+// a sim.WorldLoader. Missing worlds become a (nil, nil) result so
+// BuildUniverse falls back to constructing a fresh empty world.
+func storeWorldLoader(st tui.Storer) sim.WorldLoader {
+	type worldLoader interface {
+		Load(ctx context.Context, name string) (*world.World, error)
+	}
+	wl, ok := st.(worldLoader)
+	if !ok || wl == nil {
+		return nil
+	}
+	return func(ctx context.Context, name string) (*world.World, error) {
+		w, err := wl.Load(ctx, name)
+		if err == nil {
+			return w, nil
+		}
+		if errors.Is(err, store.ErrWorldNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
 }
 
 // cmdReplay opens a stored world's event log and walks it tick by
@@ -1062,7 +1088,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("build embedder: %w", err)
 		}
-		u, cfg, err := loadUniverse(ctx, *configPath, embedder)
+		u, cfg, err := loadUniverse(ctx, *configPath, embedder, st)
 		if err != nil {
 			return err
 		}

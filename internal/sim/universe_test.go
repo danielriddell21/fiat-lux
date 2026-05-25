@@ -200,7 +200,7 @@ worlds:
 	factory := func(_ context.Context, _ string) (brain.Brain, error) {
 		return &scriptedBrain{decisions: []brain.Decision{{}}}, nil
 	}
-	u, err := cfg.BuildUniverse(context.Background(), factory, nil)
+	u, err := cfg.BuildUniverse(context.Background(), factory, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
