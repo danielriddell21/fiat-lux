@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 
@@ -232,13 +234,9 @@ func (a *Agent) BuildPerception(w *world.World, memories []memory.Record, heard 
 	// Lifecycle: a focus pinned on an entity that no longer exists
 	// must be cleared before we build any focus view.
 	if a.Focus != 0 {
-		alive := false
-		for _, e := range ents {
-			if e.ID == a.Focus {
-				alive = true
-				break
-			}
-		}
+		alive := slices.ContainsFunc(ents, func(e world.Entity) bool {
+			return e.ID == a.Focus
+		})
 		if !alive {
 			a.Focus = 0
 			a.FocusTurnsLeft = 0
@@ -414,11 +412,11 @@ func buildFrontier(
 			Depth:     d,
 		})
 	}
-	sort.Slice(leaves, func(i, j int) bool {
-		if leaves[i].Depth != leaves[j].Depth {
-			return leaves[i].Depth > leaves[j].Depth
-		}
-		return leaves[i].EntityID < leaves[j].EntityID
+	slices.SortFunc(leaves, func(a, b brain.FrontierLeaf) int {
+		return cmp.Or(
+			cmp.Compare(b.Depth, a.Depth),
+			cmp.Compare(a.EntityID, b.EntityID),
+		)
 	})
 	if len(leaves) > frontierLeafCap {
 		leaves = leaves[:frontierLeafCap]
@@ -453,7 +451,7 @@ func longestContainmentPath(
 			roots = append(roots, e.ID)
 		}
 	}
-	sort.Slice(roots, func(i, j int) bool { return roots[i] < roots[j] })
+	slices.Sort(roots)
 
 	entByID := make(map[world.EntityID]world.Entity, len(ents))
 	for _, e := range ents {
@@ -466,14 +464,14 @@ func longestContainmentPath(
 		path = append(path, n)
 		kids := children[n]
 		if len(kids) == 0 {
-			if len(path) > len(best) || (len(path) == len(best) && idsLess(path, best)) {
-				best = append(best[:0:0], path...)
+			if len(path) > len(best) || (len(path) == len(best) && slices.Compare(path, best) < 0) {
+				best = slices.Clone(path)
 			}
 			return
 		}
 		// Sort kids for deterministic tie-breaking.
-		sorted := append([]world.EntityID{}, kids...)
-		sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+		sorted := slices.Clone(kids)
+		slices.Sort(sorted)
 		for _, c := range sorted {
 			dfs(c, path)
 		}
@@ -493,17 +491,6 @@ func longestContainmentPath(
 		}
 	}
 	return out
-}
-
-// idsLess returns true when a is lexicographically smaller than b
-// across EntityIDs. Used to break ties when two paths share length.
-func idsLess(a, b []world.EntityID) bool {
-	for i := 0; i < len(a) && i < len(b); i++ {
-		if a[i] != b[i] {
-			return a[i] < b[i]
-		}
-	}
-	return len(a) < len(b)
 }
 
 // buildFocusView walks the "contains" sub-tree rooted at focus,
@@ -532,8 +519,8 @@ func buildFocusView(
 		f := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		// Children sorted for deterministic ordering.
-		kids := append([]world.EntityID{}, children[f.id]...)
-		sort.Slice(kids, func(i, j int) bool { return kids[i] < kids[j] })
+		kids := slices.Clone(children[f.id])
+		slices.Sort(kids)
 		for _, c := range kids {
 			if visited[c] {
 				continue
@@ -544,9 +531,7 @@ func buildFocusView(
 				continue
 			}
 			subtree = append(subtree, view)
-			if f.depth+1 > depthBelow {
-				depthBelow = f.depth + 1
-			}
+			depthBelow = max(depthBelow, f.depth+1)
 			if len(subtree) >= focusSubtreeCap {
 				break
 			}
@@ -589,15 +574,13 @@ func (a *Agent) collectSuggestions(
 		a.suggestionsLastTick = make(map[world.EntityID]uint64)
 	}
 	// Bound the dedupe map: drop entries older than the horizon.
-	horizon := uint64(0)
+	var horizon uint64
 	if uint64(tick) > suggestionMemoryHorizonTicks {
 		horizon = uint64(tick) - suggestionMemoryHorizonTicks
 	}
-	for id, lastTick := range a.suggestionsLastTick {
-		if lastTick < horizon {
-			delete(a.suggestionsLastTick, id)
-		}
-	}
+	maps.DeleteFunc(a.suggestionsLastTick, func(_ world.EntityID, lastTick uint64) bool {
+		return lastTick < horizon
+	})
 
 	cooldown := uint64(suggestionCooldownTicks)
 	suggestions := make([]brain.SpawnSuggestion, 0)
@@ -609,8 +592,7 @@ func (a *Agent) collectSuggestions(
 		if count < frontierChildSpawnThreshold {
 			continue
 		}
-		last, seen := a.suggestionsLastTick[e.ID]
-		if seen && uint64(tick) < last+cooldown {
+		if last, seen := a.suggestionsLastTick[e.ID]; seen && uint64(tick) < last+cooldown {
 			continue
 		}
 		suggestions = append(suggestions, brain.SpawnSuggestion{
@@ -626,11 +608,11 @@ func (a *Agent) collectSuggestions(
 	if len(suggestions) == 0 {
 		return nil
 	}
-	sort.Slice(suggestions, func(i, j int) bool {
-		if suggestions[i].ChildCount != suggestions[j].ChildCount {
-			return suggestions[i].ChildCount > suggestions[j].ChildCount
-		}
-		return suggestions[i].EntityID < suggestions[j].EntityID
+	slices.SortFunc(suggestions, func(a, b brain.SpawnSuggestion) int {
+		return cmp.Or(
+			cmp.Compare(b.ChildCount, a.ChildCount),
+			cmp.Compare(a.EntityID, b.EntityID),
+		)
 	})
 	if len(suggestions) > maxSuggestionsPerTick {
 		suggestions = suggestions[:maxSuggestionsPerTick]

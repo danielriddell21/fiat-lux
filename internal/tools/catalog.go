@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"strings"
 
 	"github.com/danielriddell21/fiat-lux/internal/brain"
 	"github.com/danielriddell21/fiat-lux/internal/world"
@@ -867,7 +868,7 @@ func nonAgentEntities(in []brain.EntityView) []brain.EntityView {
 func containerEntities(ents []brain.EntityView, rels []brain.RelationshipView) []uint64 {
 	hasChild := make(map[uint64]bool, len(ents))
 	for _, r := range rels {
-		if !equalFoldASCII(r.Kind, "contains") {
+		if !strings.EqualFold(r.Kind, "contains") {
 			continue
 		}
 		hasChild[r.From] = true
@@ -882,28 +883,6 @@ func containerEntities(ents []brain.EntityView, rels []brain.RelationshipView) [
 		}
 	}
 	return out
-}
-
-// equalFoldASCII is a small case-insensitive comparison for ASCII
-// strings, avoiding pulling in the strings package just for one
-// call in a tools-internal helper.
-func equalFoldASCII(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := 0; i < len(a); i++ {
-		ca, cb := a[i], b[i]
-		if ca >= 'A' && ca <= 'Z' {
-			ca += 'a' - 'A'
-		}
-		if cb >= 'A' && cb <= 'Z' {
-			cb += 'a' - 'A'
-		}
-		if ca != cb {
-			return false
-		}
-	}
-	return true
 }
 
 var (

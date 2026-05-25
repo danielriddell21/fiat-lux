@@ -257,7 +257,7 @@ func TestBuildPerception_SuggestionDedupe(t *testing.T) {
 	a, _ := New(1, "x", "p", nullBrain{}, tools.Default())
 
 	parent, _ := w.Create(world.NoAgent, "continent", nil)
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		child, _ := w.Create(world.NoAgent, "forest", nil)
 		if _, err := w.Relate(world.NoAgent, parent, child, "contains"); err != nil {
 			t.Fatalf("relate: %v", err)
