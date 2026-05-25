@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/danielriddell21/fiat-lux/internal/sim"
-	"github.com/danielriddell21/fiat-lux/internal/tui"
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
@@ -16,13 +15,12 @@ const recentEventsCap = 50
 
 // StateResponse is the snapshot returned by GET /api/state.
 type StateResponse struct {
-	World         string                `json:"world"`
-	Tick          uint64                `json:"tick"`
-	Entities      []world.Entity        `json:"entities"`
-	Relationships []world.Relationship  `json:"relationships"`
-	Tree          tui.TreeView          `json:"tree"`
-	Agents        []AgentSummary        `json:"agents"`
-	RecentEvents  []world.Event         `json:"recent_events"`
+	World         string               `json:"world"`
+	Tick          uint64               `json:"tick"`
+	Entities      []world.Entity       `json:"entities"`
+	Relationships []world.Relationship `json:"relationships"`
+	Agents        []AgentSummary       `json:"agents"`
+	RecentEvents  []world.Event        `json:"recent_events"`
 }
 
 // AgentSummary is a light projection of agent.Agent for the side rail.
@@ -82,7 +80,6 @@ func buildState(sm *sim.Sim) StateResponse {
 		Tick:          uint64(wd.Tick()),
 		Entities:      entities,
 		Relationships: rels,
-		Tree:          tui.BuildTreeView(entities, rels),
 		Agents:        agents,
 		RecentEvents:  events,
 	}

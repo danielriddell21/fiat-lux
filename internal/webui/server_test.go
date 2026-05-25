@@ -108,11 +108,6 @@ func TestState_ServesSnapshotWithJSONTags(t *testing.T) {
 	if len(got.Relationships) != 1 || got.Relationships[0].Kind != "part of" {
 		t.Errorf("relationships = %+v", got.Relationships)
 	}
-	// The tree has the creator + the planet as roots (the ocean is
-	// nested under planet via "part of").
-	if len(got.Tree.Roots) != 2 {
-		t.Errorf("tree.Roots = %d, want 2 (creator + planet)", len(got.Tree.Roots))
-	}
 	if len(got.Agents) != 1 || !got.Agents[0].IsCreator {
 		t.Errorf("agents = %+v", got.Agents)
 	}

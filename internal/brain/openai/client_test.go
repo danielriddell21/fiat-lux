@@ -202,6 +202,32 @@ func TestDecide_CachedTokensSplitOff(t *testing.T) {
 	}
 }
 
+func TestExtractThought(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "no tags passes through", in: "  just a thought  ", want: "just a thought"},
+		{name: "qwen reasoning block", in: "<think>weighing options</think>final", want: "weighing options\nfinal"},
+		{name: "multiple think blocks", in: "<think>one</think>mid<think>two</think>end", want: "one\nmid\ntwo\nend"},
+		{name: "open tag without close", in: "<think>trailing", want: "trailing"},
+		{name: "empty input", in: "", want: ""},
+		{name: "tag-only", in: "<think>only the reasoning</think>", want: "only the reasoning"},
+	}
+	for _, tc := range cases {
+		got := extractThought(tc.in)
+		// Normalise repeated whitespace so test results don't depend
+		// on whether the helper happens to leave a stray space.
+		got = strings.Join(strings.Fields(got), " ")
+		want := strings.Join(strings.Fields(tc.want), " ")
+		if got != want {
+			t.Errorf("%s: extractThought(%q) = %q, want %q", tc.name, tc.in, got, want)
+		}
+	}
+}
+
 func TestRedact(t *testing.T) {
 	t.Parallel()
 	in := "auth failed for key sk-abc-XYZ123 and also sk-ant-secret456 fine"

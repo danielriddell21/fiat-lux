@@ -333,6 +333,28 @@ type memoryFakeStepper struct {
 
 func (m *memoryFakeStepper) MemorySnapshot() MemorySnapshot { return m.snap }
 
+func TestSpeedKeys_AdjustTickInterval(t *testing.T) {
+	t.Parallel()
+	m := newModel(t, nil)
+	start := m.tickInterval
+	m = sendKey(t, m, "+")
+	if !(m.tickInterval < start) {
+		t.Errorf("'+' tick interval = %s, want < %s", m.tickInterval, start)
+	}
+	mFast := m
+	m = sendKey(t, m, "-")
+	if !(m.tickInterval > mFast.tickInterval) {
+		t.Errorf("'-' tick interval = %s, want > %s", m.tickInterval, mFast.tickInterval)
+	}
+	// Hammer '+' until clamped, then check the floor holds.
+	for i := 0; i < 50; i++ {
+		m = sendKey(t, m, "+")
+	}
+	if m.tickInterval < 100*1e6 {
+		t.Errorf("speed up unclamped: %s", m.tickInterval)
+	}
+}
+
 func TestMemoryToggle(t *testing.T) {
 	t.Parallel()
 	m := newModel(t, nil)

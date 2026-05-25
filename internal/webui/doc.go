@@ -4,8 +4,7 @@
 // streams Step events over Server-Sent Events at /api/events. Static
 // assets (HTML, CSS, JS, vendored cytoscape.js bootstrap) are baked
 // in via go:embed so the binary stays single-file. Browsers render a
-// force-directed graph of entities and relationships by default; a
-// toggle swaps to a tree view that mirrors the TUI's Creation Tree.
+// force-directed graph of entities and relationships.
 //
 // The server attaches to a *sim.Sim via Server.Publish, which is
 // shaped to match sim.Sim.Observer. cmd/fiatlux composes the webui

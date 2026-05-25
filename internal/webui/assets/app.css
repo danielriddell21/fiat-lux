@@ -68,29 +68,6 @@ header h1 {
   font-weight: 600;
 }
 
-nav {
-  display: flex;
-  gap: 4px;
-}
-
-.view-btn {
-  background: var(--bg-card);
-  color: var(--fg-muted);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 5px 14px;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 12px;
-  transition: background 0.1s ease, color 0.1s ease;
-}
-.view-btn:hover { color: var(--fg); }
-.view-btn.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
 /* ── main ─────────────────────────────────────────────────────── */
 
 main {
@@ -109,23 +86,7 @@ main {
 #cy {
   position: absolute;
   inset: 0;
-  display: none;
 }
-#cy[data-active] { display: block; }
-
-#tree {
-  position: absolute;
-  inset: 0;
-  padding: 20px;
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--fg);
-  white-space: pre;
-  overflow: auto;
-  display: none;
-}
-#tree[data-active] { display: block; }
 
 .empty {
   position: absolute;

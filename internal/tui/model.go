@@ -338,6 +338,10 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	case Matches(key, m.keys.TogglePause):
 		m.paused = !m.paused
 		return m, nil
+	case Matches(key, m.keys.SpeedUp):
+		return m.adjustSpeed(2, 1)
+	case Matches(key, m.keys.SpeedDown):
+		return m.adjustSpeed(1, 2)
 	case Matches(key, m.keys.Save):
 		return m.handleSave()
 	case Matches(key, m.keys.DebugCreate):
@@ -388,6 +392,26 @@ func (m Model) handleDebugRelate() (tea.Model, tea.Cmd) {
 		return m.flash(fmt.Sprintf("relate failed: %v", err))
 	}
 	return m.flash(fmt.Sprintf("relation #%d: #%d part of #%d", id, from.ID, to.ID))
+}
+
+// adjustSpeed scales the tick interval by num/den (e.g. 2/1 to halve
+// the interval = double the rate). Clamped so the user can't disappear
+// off the fast end into a busy loop or off the slow end into nothing
+// happening at all. The next scheduleTick() picks up the new value.
+func (m Model) adjustSpeed(num, den int) (tea.Model, tea.Cmd) {
+	const (
+		minInterval = 100 * time.Millisecond
+		maxInterval = 30 * time.Second
+	)
+	next := m.tickInterval * time.Duration(den) / time.Duration(num)
+	if next < minInterval {
+		next = minInterval
+	}
+	if next > maxInterval {
+		next = maxInterval
+	}
+	m.tickInterval = next
+	return m.flash(fmt.Sprintf("tick interval: %s", next))
 }
 
 func (m Model) handleSave() (tea.Model, tea.Cmd) {

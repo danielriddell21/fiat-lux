@@ -1,8 +1,7 @@
 // fiat-lux web viewer.
 //
 // Loads /api/state for the snapshot, /api/events for live updates.
-// Renders a force-directed graph by default; a Tree toggle swaps to
-// the same view the TUI shows.
+// Renders a force-directed graph of entities and relationships.
 
 (function () {
   "use strict";
@@ -19,15 +18,12 @@
     details: document.getElementById("details"),
     detailsCard: document.getElementById("details-card"),
     cy: document.getElementById("cy"),
-    tree: document.getElementById("tree"),
     empty: document.getElementById("empty"),
     eventLog: document.getElementById("event-log"),
     conn: document.getElementById("conn"),
-    viewBtns: document.querySelectorAll(".view-btn"),
   };
 
   let cy = null;
-  let currentView = "graph";
   let lastState = null;
   let selectedId = null;
   const eventLogMax = 80;
@@ -160,30 +156,6 @@
     }
   }
 
-  // ── Tree view (mirrors the TUI's BuildTreeView output) ────────
-
-  function renderTree(state) {
-    const lines = [];
-    const writeNode = (node, prefix, isLast, isRoot) => {
-      const branch = isRoot ? "" : (isLast ? "└─ " : "├─ ");
-      const label = (node.name ? `${node.type} "${node.name}"` : node.type) +
-        ` #${node.id}` + (node.destroyed ? "  (destroyed)" : "");
-      lines.push(prefix + branch + label);
-      const childPrefix = isRoot ? "" : prefix + (isLast ? "   " : "│  ");
-      const children = node.children || [];
-      children.forEach((child, i) => {
-        writeNode(child, childPrefix, i === children.length - 1, false);
-      });
-    };
-    const roots = (state.tree && state.tree.roots) || [];
-    if (roots.length === 0) {
-      els.tree.textContent = "(void — nothing has been created yet)";
-      return;
-    }
-    roots.forEach((r) => writeNode(r, "", true, true));
-    els.tree.textContent = lines.join("\n");
-  }
-
   // ── Side rail ──────────────────────────────────────────────────
 
   function renderAgents(state) {
@@ -259,24 +231,6 @@
     els.eventLog.scrollTop = els.eventLog.scrollHeight;
   }
 
-  // ── view toggle ───────────────────────────────────────────────
-
-  function setView(name) {
-    currentView = name;
-    els.viewBtns.forEach((b) => b.classList.toggle("active", b.dataset.view === name));
-    if (name === "graph") {
-      els.cy.setAttribute("data-active", "");
-      els.tree.removeAttribute("data-active");
-      if (lastState) renderGraph(lastState);
-    } else {
-      els.tree.setAttribute("data-active", "");
-      els.cy.removeAttribute("data-active");
-      if (lastState) renderTree(lastState);
-    }
-  }
-
-  els.viewBtns.forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
-
   // ── networking ────────────────────────────────────────────────
 
   async function fetchState() {
@@ -287,7 +241,7 @@
       lastState = state;
       renderHeader(state);
       renderAgents(state);
-      if (currentView === "graph") renderGraph(state); else renderTree(state);
+      renderGraph(state);
       showDetails();
     } catch (err) {
       console.error("fetch state:", err);
@@ -303,7 +257,7 @@
       try { ev = JSON.parse(e.data); } catch (_) { return; }
       renderStep(ev);
       appendEvent(ev);
-      // Refresh snapshot for graph / tree consistency.
+      // Refresh snapshot so the graph stays in sync.
       fetchState();
     };
     es.addEventListener("step", onEvent);
