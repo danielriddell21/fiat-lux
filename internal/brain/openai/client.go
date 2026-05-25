@@ -248,7 +248,7 @@ func parseDecision(r chatResponse) (brain.Decision, error) {
 	}
 
 	d := brain.Decision{
-		Thought: msg.Content,
+		Thought: extractThought(msg.Content),
 		Usage:   usage,
 	}
 	if len(msg.ToolCalls) > 0 {
@@ -269,6 +269,42 @@ func parseDecision(r chatResponse) (brain.Decision, error) {
 		}
 	}
 	return d, nil
+}
+
+// extractThought normalises a raw assistant message into the reasoning
+// text shown in the TUI. Qwen-family models (and a few others) wrap
+// their chain-of-thought in <think>...</think>; we strip the tags but
+// keep the inner text so the reasoning pane shows the monologue.
+// Segments are joined with a blank line so the user can tell the
+// reasoning from any post-think answer text.
+func extractThought(content string) string {
+	if !strings.Contains(content, "<think>") {
+		return strings.TrimSpace(content)
+	}
+	var parts []string
+	push := func(s string) {
+		if t := strings.TrimSpace(s); t != "" {
+			parts = append(parts, t)
+		}
+	}
+	s := content
+	for {
+		i := strings.Index(s, "<think>")
+		if i < 0 {
+			push(s)
+			break
+		}
+		push(s[:i])
+		s = s[i+len("<think>"):]
+		j := strings.Index(s, "</think>")
+		if j < 0 {
+			push(s)
+			break
+		}
+		push(s[:j])
+		s = s[j+len("</think>"):]
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // redact scrubs likely API keys from an upstream error body. Cheap
