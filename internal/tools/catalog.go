@@ -378,10 +378,11 @@ func Reflect() Tool {
 // SpawnAgentArgs is the public arg struct so the sim adapter can
 // decode the call before forwarding to its multi-agent runtime.
 type SpawnAgentArgs struct {
-	Name         string         `json:"name"`
-	SystemPrompt string         `json:"system_prompt"`
-	BrainConfig  map[string]any `json:"brain_config,omitempty"`
-	GrantedTools []string       `json:"granted_tools,omitempty"`
+	Name         string             `json:"name"`
+	SystemPrompt string             `json:"system_prompt"`
+	BrainConfig  map[string]any     `json:"brain_config,omitempty"`
+	GrantedTools []string           `json:"granted_tools,omitempty"`
+	Drives       map[string]float64 `json:"drives,omitempty"`
 }
 
 // alias for backwards compatibility within this file.
@@ -399,6 +400,11 @@ func SpawnAgent() Tool {
 				"system_prompt": map[string]any{"type": "string"},
 				"brain_config":  map[string]any{"type": "object"},
 				"granted_tools": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"drives": map[string]any{
+					"type":                 "object",
+					"description":          "intrinsic motivational state - named float weights; if omitted, the child inherits the parent's drives",
+					"additionalProperties": map[string]any{"type": "number"},
+				},
 			},
 			"required": []string{"name", "system_prompt"},
 		},

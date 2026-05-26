@@ -21,6 +21,7 @@ func RenderPerception(p brain.Perception) string {
 	type rendered struct {
 		Tick          uint64              `json:"tick"`
 		EntityCount   int                 `json:"entity_count"`
+		Drives        map[string]float64  `json:"drives,omitempty"`
 		Entities      []entitySummary     `json:"entities,omitempty"`
 		Relationships []relSummary        `json:"relationships,omitempty"`
 		RecentEvents  []eventSummary      `json:"recent_events,omitempty"`
@@ -32,6 +33,7 @@ func RenderPerception(p brain.Perception) string {
 	r := rendered{
 		Tick:        p.Tick,
 		EntityCount: p.EntityCount,
+		Drives:      p.Drives,
 	}
 	for _, e := range p.AliveEntities {
 		r.Entities = append(r.Entities, entitySummary{

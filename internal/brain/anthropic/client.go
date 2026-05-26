@@ -295,17 +295,18 @@ func parseDecision(r messagesResponse) (brain.Decision, error) {
 // happen to want the same compact JSON representation.
 func renderPerceptionJSON(p brain.Perception) string {
 	type rendered struct {
-		Tick          uint64        `json:"tick"`
-		EntityCount   int           `json:"entity_count"`
-		Entities      []entityV     `json:"entities,omitempty"`
-		Relationships []relV        `json:"relationships,omitempty"`
-		RecentEvents  []eventV      `json:"recent_events,omitempty"`
-		Memories      []memoryV     `json:"memories,omitempty"`
-		Focus         *focusV       `json:"focus,omitempty"`
-		Frontier      *frontierV    `json:"frontier,omitempty"`
-		Suggestions   []suggestionV `json:"spawn_suggestions,omitempty"`
+		Tick          uint64             `json:"tick"`
+		EntityCount   int                `json:"entity_count"`
+		Drives        map[string]float64 `json:"drives,omitempty"`
+		Entities      []entityV          `json:"entities,omitempty"`
+		Relationships []relV             `json:"relationships,omitempty"`
+		RecentEvents  []eventV           `json:"recent_events,omitempty"`
+		Memories      []memoryV          `json:"memories,omitempty"`
+		Focus         *focusV            `json:"focus,omitempty"`
+		Frontier      *frontierV         `json:"frontier,omitempty"`
+		Suggestions   []suggestionV      `json:"spawn_suggestions,omitempty"`
 	}
-	r := rendered{Tick: p.Tick, EntityCount: p.EntityCount}
+	r := rendered{Tick: p.Tick, EntityCount: p.EntityCount, Drives: p.Drives}
 	for _, e := range p.AliveEntities {
 		r.Entities = append(r.Entities, entityV{ID: e.ID, Type: e.TypeLabel, Props: e.Properties})
 	}

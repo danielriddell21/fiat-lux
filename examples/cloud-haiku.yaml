@@ -13,6 +13,13 @@ worlds:
         What you make is entirely your choice. Be brief - issue at most
         one tool call per turn with a short justification. Below is what
         currently exists and what you remember.
+      # Intrinsic drives are a free-form map of named float weights
+      # surfaced in every perception. The framework does not
+      # interpret the keys - the brain is free to honour or ignore
+      # them. Spawned children inherit unless they override.
+      drives:
+        novelty: 0.7
+        coherence: 0.3
       brain:
         provider: anthropic
         model: claude-haiku-4-5

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/danielriddell21/fiat-lux/internal/brain"
+	"github.com/danielriddell21/fiat-lux/internal/drives"
 	"github.com/danielriddell21/fiat-lux/internal/memory"
 	"github.com/danielriddell21/fiat-lux/internal/tools"
 	"github.com/danielriddell21/fiat-lux/internal/world"
@@ -91,6 +92,11 @@ type Agent struct {
 	// which a SpawnSuggestion was last emitted for that entity, used
 	// to dedupe nudges across consecutive BuildPerception calls.
 	suggestionsLastTick map[world.EntityID]uint64
+
+	// Drives is the agent's intrinsic motivational state, surfaced
+	// in every Perception. Nil for agents that opted out of drives;
+	// the framework does not interpret the keys.
+	Drives drives.State
 
 	// inbox holds Heard events delivered by Speak from other
 	// agents in the same world. Drained into Perception.Heard by
@@ -293,6 +299,7 @@ func (a *Agent) BuildPerception(w *world.World, memories []memory.Record, heard 
 		Heard:              heard,
 		Frontier:           buildFrontier(ents, children, parents, depth),
 		Suggestions:        a.collectSuggestions(ents, children, tick),
+		Drives:             a.Drives.Clone(),
 	}
 
 	if a.Focus != 0 {

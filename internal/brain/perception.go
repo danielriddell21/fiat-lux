@@ -49,6 +49,12 @@ type Perception struct {
 	// further detailing to a SpawnAgent seems useful. Engine never
 	// spawns; the LLM decides whether to act on a suggestion.
 	Suggestions []SpawnSuggestion
+
+	// Drives is the agent's intrinsic motivational state - a
+	// free-form map of named float weights (e.g. novelty, growth).
+	// The framework does not interpret the keys; the brain is free
+	// to honour, ignore, or redefine any drive.
+	Drives map[string]float64
 }
 
 // FocusView is the agent's current pinned-focus snapshot.
