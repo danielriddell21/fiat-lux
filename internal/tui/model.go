@@ -31,6 +31,15 @@ type MemoryAccessor interface {
 	MemorySnapshot() MemorySnapshot
 }
 
+// Interveneable is the optional Stepper supertype the TUI uses to
+// drive sandbox interventions (the "i" key chord). The sim adapter
+// satisfies it.
+type Interveneable interface {
+	InterveneCreate(typeLabel string) (string, error)
+	InterveneDestroy(entityID uint64) (string, error)
+	InterveneSpeak(content string) (string, error)
+}
+
 // AgentInfo is the TUI's minimal projection of one agent.
 type AgentInfo struct {
 	ID        uint64
@@ -97,9 +106,10 @@ type Model struct {
 	width  int
 	height int
 
-	paused        bool
-	helpVisible   bool
-	memoryVisible bool
+	paused          bool
+	helpVisible     bool
+	memoryVisible   bool
+	interveneActive bool
 
 	tickInterval time.Duration
 	lastStep     StepSummary
@@ -315,6 +325,9 @@ func (m Model) flashThenTick(text string) (tea.Model, tea.Cmd) {
 const messageTTL = 3 * time.Second
 
 func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
+	if m.interveneActive {
+		return m.handleInterveneChord(key)
+	}
 	switch {
 	case Matches(key, m.keys.Quit):
 		return m, tea.Quit
@@ -324,6 +337,9 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	case Matches(key, m.keys.MemoryToggle):
 		m.memoryVisible = !m.memoryVisible
 		return m, nil
+	case Matches(key, m.keys.Intervene):
+		m.interveneActive = true
+		return m.flash("intervene: c=create / d=destroy / s=speak / esc=cancel")
 	case Matches(key, m.keys.FocusNext):
 		m.cycleFocus(+1)
 		return m, nil
@@ -356,6 +372,57 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		return m.flash(fmt.Sprintf("tick advanced to %d", m.focusedWorld().Tick()))
 	}
 	return m, nil
+}
+
+// handleInterveneChord consumes the second key of the "i" chord and
+// invokes the matching intervention on the sim adapter. esc cancels.
+func (m Model) handleInterveneChord(key string) (tea.Model, tea.Cmd) {
+	m.interveneActive = false
+	iv, ok := m.sim.(Interveneable)
+	if !ok {
+		return m.flash("intervene: sim does not support interventions")
+	}
+	switch key {
+	case "esc":
+		return m.flash("intervene: cancelled")
+	case "c":
+		t := dummyTypes[m.dummyCursor%len(dummyTypes)]
+		m.dummyCursor++
+		out, err := iv.InterveneCreate(t)
+		if err != nil {
+			return m.flash(fmt.Sprintf("intervene: %v", err))
+		}
+		return m.flash(out)
+	case "d":
+		live := m.focusedWorld().Entities()
+		if len(live) == 0 {
+			return m.flash("intervene: nothing to destroy")
+		}
+		// Don't destroy agents; pick the most recent non-agent.
+		var targetID world.EntityID
+		for i := len(live) - 1; i >= 0; i-- {
+			if live[i].TypeLabel != "agent" {
+				targetID = live[i].ID
+				break
+			}
+		}
+		if targetID == 0 {
+			return m.flash("intervene: no non-agent targets")
+		}
+		out, err := iv.InterveneDestroy(uint64(targetID))
+		if err != nil {
+			return m.flash(fmt.Sprintf("intervene: %v", err))
+		}
+		return m.flash(out)
+	case "s":
+		out, err := iv.InterveneSpeak("the void stirs.")
+		if err != nil {
+			return m.flash(fmt.Sprintf("intervene: %v", err))
+		}
+		return m.flash(out)
+	default:
+		return m.flash("intervene: unknown action, press c/d/s/esc")
+	}
 }
 
 func (m Model) handleDebugCreate() (tea.Model, tea.Cmd) {

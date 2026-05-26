@@ -42,6 +42,27 @@
         <h2>Selected</h2>
         <div id="details"></div>
       </section>
+      <section class="card intervene">
+        <h2>Intervene</h2>
+        <p class="hint">Step into the kosmos as "the void".</p>
+        <form id="intervene-form">
+          <label>op
+            <select name="op">
+              <option value="create">create</option>
+              <option value="destroy">destroy</option>
+              <option value="speak">speak</option>
+            </select>
+          </label>
+          <label>type_label / content
+            <input type="text" name="value" placeholder="planet | hello world | …">
+          </label>
+          <label>entity_id
+            <input type="number" name="entity_id" min="0" placeholder="for destroy">
+          </label>
+          <button type="submit">apply</button>
+        </form>
+        <div id="intervene-status" class="faint"></div>
+      </section>
     </aside>
   </main>
 

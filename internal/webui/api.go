@@ -148,3 +148,28 @@ func errString(err error) string {
 	}
 	return err.Error()
 }
+
+// handleIntervene applies a sandbox intervention to the currently
+// focused world. POST only; body is sim.Intervention as JSON.
+func (s *Server) handleIntervene(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	sm := s.provider()
+	if sm == nil {
+		http.Error(w, "no sim attached", http.StatusServiceUnavailable)
+		return
+	}
+	var op sim.Intervention
+	if err := json.NewDecoder(r.Body).Decode(&op); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := sm.Intervene(r.Context(), op); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
