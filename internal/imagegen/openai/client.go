@@ -42,10 +42,12 @@ type Client struct {
 	httpClient *http.Client
 }
 
-// New constructs a Client. APIKey is required.
+// New constructs a Client. APIKey is required when BaseURL is empty
+// (i.e. when targeting api.openai.com); openai-compatible endpoints
+// may leave it blank.
 func New(opts Options) (*Client, error) {
-	if opts.APIKey == "" {
-		return nil, errors.New("openai imagegen: APIKey is required")
+	if opts.APIKey == "" && opts.BaseURL == "" {
+		return nil, errors.New("openai imagegen: APIKey is required for the OpenAI endpoint")
 	}
 	c := &Client{
 		baseURL: opts.BaseURL,
@@ -99,7 +101,9 @@ func (c *Client) Generate(ctx context.Context, prompt string) ([]byte, string, e
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)

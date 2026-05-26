@@ -33,6 +33,7 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/brain/stub"
 	"github.com/danielriddell21/fiat-lux/internal/imagegen"
 	imageopenai "github.com/danielriddell21/fiat-lux/internal/imagegen/openai"
+	imageopenaicompat "github.com/danielriddell21/fiat-lux/internal/imagegen/openaicompat"
 	"github.com/danielriddell21/fiat-lux/internal/memory"
 	"github.com/danielriddell21/fiat-lux/internal/sim"
 	"github.com/danielriddell21/fiat-lux/internal/store"
@@ -184,7 +185,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	configPath := fs.String("config", "", "YAML config for a multi-world universe (overrides --brain)")
 	webAddr := fs.String("web-addr", "", "address to bind the optional web viewer (e.g. 127.0.0.1:8080)")
 	saveMode := fs.String("save-mode", "", "persistence cadence: manual | interval:<duration> (e.g. interval:30s)")
-	multimodalSpec := fs.String("multimodal", "none", "image generator: none | openai[:model] (requires OPENAI_API_KEY)")
+	multimodalSpec := fs.String("multimodal", "none", "image generator: none | openai[:model] | openaicompat:<base_url>::<model>")
 	imageCacheDir := fs.String("image-cache", "", "directory for generated images (default: $XDG_CACHE_HOME/fiatlux/images)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -385,7 +386,13 @@ func startWebUI(ctx context.Context, addr string, provider webui.SimProvider, at
 // + on-disk Cache. Returns (nil, nil, nil) for "none". The cache is
 // shared between the sim (writes) and the web UI (reads).
 //
-// Specs: "none" | "openai" | "openai:<model>"
+// Specs:
+//
+//	none                                 - disabled (default)
+//	openai[:<model>]                     - OpenAI Images (env: OPENAI_API_KEY)
+//	openaicompat:<base_url>::<model>     - any OpenAI-compatible images endpoint
+//	                                       (LM Studio, llama.cpp, vLLM, openedai-images, ...).
+//	                                       APIKey is optional; set via OPENAI_API_KEY when needed.
 func buildMultimodal(spec, cacheDir string) (*sim.MultimodalOptions, *imagegen.Cache, error) {
 	if spec == "" || spec == "none" {
 		return nil, nil, nil
@@ -401,6 +408,20 @@ func buildMultimodal(spec, cacheDir string) (*sim.MultimodalOptions, *imagegen.C
 	cache := imagegen.NewCache(dir)
 
 	switch {
+	case strings.HasPrefix(spec, "openaicompat:"):
+		baseURL, model, ok := strings.Cut(strings.TrimPrefix(spec, "openaicompat:"), "::")
+		if !ok || baseURL == "" || model == "" {
+			return nil, nil, fmt.Errorf("multimodal: openaicompat spec must be openaicompat:<base_url>::<model>, got %q", spec)
+		}
+		client, err := imageopenaicompat.New(imageopenaicompat.Options{
+			BaseURL: baseURL,
+			APIKey:  os.Getenv("OPENAI_API_KEY"), // optional
+			Model:   model,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return &sim.MultimodalOptions{Generator: client, Cache: cache}, cache, nil
 	case spec == "openai" || strings.HasPrefix(spec, "openai:"):
 		model := ""
 		if rest, ok := strings.CutPrefix(spec, "openai:"); ok {
@@ -414,12 +435,9 @@ func buildMultimodal(spec, cacheDir string) (*sim.MultimodalOptions, *imagegen.C
 		if err != nil {
 			return nil, nil, err
 		}
-		return &sim.MultimodalOptions{
-			Generator: client,
-			Cache:     cache,
-		}, cache, nil
+		return &sim.MultimodalOptions{Generator: client, Cache: cache}, cache, nil
 	default:
-		return nil, nil, fmt.Errorf("unknown multimodal spec %q (try none | openai[:<model>])", spec)
+		return nil, nil, fmt.Errorf("unknown multimodal spec %q (try none | openai[:<model>] | openaicompat:<url>::<model>)", spec)
 	}
 }
 
