@@ -21,6 +21,7 @@ func helpEntries() []helpEntry {
 		{"s", "save world to store"},
 		{"m", "memory inspector"},
 		{"l", "lineage overlay"},
+		{"a", "annals (narrator log)"},
 		{"i + c/d/s", "intervene as the void: create / destroy / speak"},
 		{"n", "(debug) create a random entity"},
 		{"x", "(debug) destroy the most recent entity"},

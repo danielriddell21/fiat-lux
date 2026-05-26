@@ -708,6 +708,20 @@ func (a *simAdapter) Step(ctx context.Context) (tui.StepSummary, error) {
 	}, nil
 }
 
+// Annals satisfies tui.AnnalsAccessor: forwards the sim's chapter
+// log into the TUI's projection.
+func (a *simAdapter) Annals() []tui.ChapterSummary {
+	chapters := a.s.Annals()
+	if len(chapters) == 0 {
+		return nil
+	}
+	out := make([]tui.ChapterSummary, len(chapters))
+	for i, c := range chapters {
+		out[i] = tui.ChapterSummary{Tick: c.Tick, Content: c.Content}
+	}
+	return out
+}
+
 // Agents satisfies tui.AgentLister.
 func (a *simAdapter) Agents() []tui.AgentInfo {
 	roster := a.s.Agents()
@@ -860,6 +874,19 @@ func (a *universeAdapter) Worlds() []tui.WorldInfo {
 func (a *universeAdapter) FocusedWorldIdx() int        { return a.u.FocusedIdx() }
 func (a *universeAdapter) SetFocusedWorldIdx(i int)    { a.u.SetFocusedIdx(i) }
 func (a *universeAdapter) CycleFocusedWorld(delta int) { a.u.CycleFocus(delta) }
+
+// Annals satisfies tui.AnnalsAccessor, scoped to the focused world.
+func (a *universeAdapter) Annals() []tui.ChapterSummary {
+	chapters := a.u.Focused().Annals()
+	if len(chapters) == 0 {
+		return nil
+	}
+	out := make([]tui.ChapterSummary, len(chapters))
+	for i, c := range chapters {
+		out[i] = tui.ChapterSummary{Tick: c.Tick, Content: c.Content}
+	}
+	return out
+}
 
 // Agents / FocusedAgentID / SetFocusedAgentID satisfy
 // tui.AgentLister, scoped to the focused world.

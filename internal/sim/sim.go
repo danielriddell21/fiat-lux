@@ -14,6 +14,7 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/imagegen"
 	"github.com/danielriddell21/fiat-lux/internal/macros"
 	"github.com/danielriddell21/fiat-lux/internal/memory"
+	"github.com/danielriddell21/fiat-lux/internal/narrator"
 	"github.com/danielriddell21/fiat-lux/internal/tools"
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
@@ -79,6 +80,11 @@ type Sim struct {
 	// events asynchronously. Nil keeps the sim image-free.
 	multimodal *MultimodalOptions
 	imageWG    sync.WaitGroup
+
+	// narrator and annals: optional read-only chronicler.
+	narrator     *narrator.Narrator
+	annals       []narrator.Chapter
+	narratorBusy bool
 }
 
 // agentRuntime holds the per-agent state the sim tracks alongside
@@ -167,6 +173,11 @@ type Options struct {
 	// The image is generated asynchronously and the entity is
 	// updated via World.Modify; replay does not regenerate.
 	Multimodal *MultimodalOptions
+
+	// Narrator, when non-nil, is a read-only meta-agent that
+	// writes chapters to the world's Annals log on a cadence the
+	// narrator's policy decides. Nil disables the feature.
+	Narrator *narrator.Narrator
 }
 
 // MultimodalOptions wires an image generator into the sim's Create
@@ -255,6 +266,7 @@ func New(opts Options) (*Sim, error) {
 		maxSpawnDepth:          maxDepth,
 		perAgentRT:             make(map[world.EntityID]*agentRuntime),
 		multimodal:             opts.Multimodal,
+		narrator:               opts.Narrator,
 	}
 
 	if err := opts.Drives.Validate(); err != nil {
@@ -532,6 +544,7 @@ func (s *Sim) stepAgent(ctx context.Context, ag *agent.Agent, rt *agentRuntime) 
 
 	rt.lastIdle = decision.ToolCall == nil || decision.ToolCall.Name == "Wait"
 	ag.MarkSeen(s.World)
+	s.maybeWriteChapter(ctx)
 
 	if rt.reflector != nil && rt.reflector.ShouldReflect(tick) {
 		inserted, usage, err := rt.reflector.Reflect(ctx, ag.Memory, ag.EntityID, tick, ag.Embedder)
@@ -885,6 +898,11 @@ func (s *Sim) Close() error {
 			continue
 		}
 		if err := a.Brain.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if s.narrator != nil {
+		if err := s.narrator.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

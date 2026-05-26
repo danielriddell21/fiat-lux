@@ -341,6 +341,30 @@ func TestIntervene_RejectsGet(t *testing.T) {
 	}
 }
 
+func TestAnnals_ReturnsEmptyArrayWhenNone(t *testing.T) {
+	t.Parallel()
+	s := newTestSim(t)
+	srv := newTestServer(t, s)
+	hs := httptest.NewServer(srv.srv.Handler)
+	defer hs.Close()
+
+	resp, err := http.Get(hs.URL + "/api/annals")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := payload["chapters"]; !ok {
+		t.Errorf("response missing 'chapters' key: %v", payload)
+	}
+}
+
 func TestIsLocalOnly(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

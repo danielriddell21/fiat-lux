@@ -40,6 +40,19 @@ type Interveneable interface {
 	InterveneSpeak(content string) (string, error)
 }
 
+// AnnalsAccessor is an optional supertype of Stepper used by the
+// Annals overlay (key "a"). The sim adapter satisfies it when a
+// narrator is configured.
+type AnnalsAccessor interface {
+	Annals() []ChapterSummary
+}
+
+// ChapterSummary is the TUI's projection of one narrator chapter.
+type ChapterSummary struct {
+	Tick    uint64
+	Content string
+}
+
 // AgentInfo is the TUI's minimal projection of one agent.
 type AgentInfo struct {
 	ID        uint64
@@ -112,6 +125,7 @@ type Model struct {
 	helpVisible     bool
 	memoryVisible   bool
 	lineageVisible  bool
+	annalsVisible   bool
 	interveneActive bool
 
 	tickInterval time.Duration
@@ -343,6 +357,9 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	case Matches(key, m.keys.LineageToggle):
 		m.lineageVisible = !m.lineageVisible
 		return m, nil
+	case Matches(key, m.keys.AnnalsToggle):
+		m.annalsVisible = !m.annalsVisible
+		return m, nil
 	case Matches(key, m.keys.Intervene):
 		m.interveneActive = true
 		return m.flash("intervene: c=create / d=destroy / s=speak / esc=cancel")
@@ -538,6 +555,9 @@ func (m Model) Render() string {
 	if m.lineageVisible {
 		return m.renderLineageScreen(w, h)
 	}
+	if m.annalsVisible {
+		return m.renderAnnalsScreen(w, h)
+	}
 
 	info := StatusInfo{
 		WorldName:   m.focusedWorld().Name(),
@@ -642,6 +662,20 @@ func (m Model) renderLineageScreen(width, height int) string {
 		agents = lister.Agents()
 	}
 	body := RenderLineage(agents, m.styles)
+	w := width - 4
+	if w > 80 {
+		w = 80
+	}
+	box := m.styles.PaneBorder.Width(w).Render(body)
+	return lg.Place(width, height, lg.Center, lg.Center, box)
+}
+
+func (m Model) renderAnnalsScreen(width, height int) string {
+	var chapters []ChapterSummary
+	if accessor, ok := m.sim.(AnnalsAccessor); ok {
+		chapters = accessor.Annals()
+	}
+	body := RenderAnnals(chapters, m.styles)
 	w := width - 4
 	if w > 80 {
 		w = 80

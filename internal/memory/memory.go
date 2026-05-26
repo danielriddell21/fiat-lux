@@ -30,6 +30,7 @@ const (
 	KindThought     Kind = "thought"     // inner monologue from the brain
 	KindReflection  Kind = "reflection"  // higher-level synthesis
 	KindInheritance Kind = "inheritance" // digest passed down from a dead parent
+	KindChapter     Kind = "chapter"     // narrator-authored summary of a world's recent history
 )
 
 // Record is one entry in an agent's memory stream. Smallville's
