@@ -86,6 +86,9 @@ type agentRuntime struct {
 	// macros is the agent's runtime-defined macro set. Always
 	// non-nil after registerAgent.
 	macros *macros.Set
+	// dead is set once the agent has called Die. Dead agents are
+	// skipped by Step but remain in the roster for TUI continuity.
+	dead bool
 }
 
 // StepResult is a structured summary of one Step.
@@ -295,6 +298,7 @@ func (s *Sim) registerAgent(r registration) (*agent.Agent, error) {
 	ag.Importance = r.importance
 	ag.SpawnDepth = r.spawnDepth
 	ag.Drives = r.drives.Clone()
+	ag.ParentEntityID = r.spawnedBy
 
 	macroSet := r.macros
 	if macroSet == nil {
@@ -377,6 +381,15 @@ func (s *Sim) RootMacros() *macros.Set {
 		return nil
 	}
 	return rt.macros.Clone()
+}
+
+// IsDead reports whether the agent with the given EntityID has
+// called Die. Unknown IDs return false.
+func (s *Sim) IsDead(id world.EntityID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rt := s.perAgentRT[id]
+	return rt != nil && rt.dead
 }
 
 // Step picks the next agent in round-robin order and runs one
@@ -482,10 +495,10 @@ func (s *Sim) stepAgent(ctx context.Context, ag *agent.Agent, rt *agentRuntime) 
 }
 
 // invokeTool dispatches the agent's chosen tool. SpawnAgent, Speak,
-// DefineTool, Zoom, and Unzoom are intercepted here because they
-// need access to per-world or per-agent state the registry cannot
-// reach. Macro calls are expanded against the agent's macro set and
-// recursively dispatched.
+// DefineTool, Die, Zoom, and Unzoom are intercepted here because
+// they need access to per-world or per-agent state the registry
+// cannot reach. Macro calls are expanded against the agent's macro
+// set and recursively dispatched.
 func (s *Sim) invokeTool(ctx context.Context, ag *agent.Agent, call brain.ToolCall, tick world.Tick) (string, error) {
 	switch call.Name {
 	case "SpawnAgent":
@@ -498,6 +511,8 @@ func (s *Sim) invokeTool(ctx context.Context, ag *agent.Agent, call brain.ToolCa
 		return s.handleUnzoom(ag)
 	case "DefineTool":
 		return s.handleDefineTool(ag, call.Args)
+	case "Die":
+		return s.handleDie(ctx, ag, call.Args, tick)
 	}
 	if rt := s.runtimeFor(ag.EntityID); rt != nil && rt.macros != nil {
 		if m, ok := rt.macros.Get(call.Name); ok {
@@ -766,7 +781,13 @@ func (s *Sim) handleUnzoom(ag *agent.Agent) (string, error) {
 }
 
 func (s *Sim) shouldSkip(ag *agent.Agent, rt *agentRuntime) bool {
-	if rt == nil || !rt.lastIdle {
+	if rt == nil {
+		return false
+	}
+	if rt.dead {
+		return true
+	}
+	if !rt.lastIdle {
 		return false
 	}
 	// A pending Speak in the inbox is invisible to the world event

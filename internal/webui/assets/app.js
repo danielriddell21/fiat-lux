@@ -164,8 +164,12 @@
     els.agents.innerHTML = "";
     state.agents.forEach((a) => {
       const li = document.createElement("li");
-      li.className = a.is_creator ? "creator" : "";
+      const classes = [];
+      if (a.is_creator) classes.push("creator");
+      if (a.dead) classes.push("dead");
+      li.className = classes.join(" ");
       let html = `<span class="name">${escapeHTML(a.name)}</span><span class="id">#${a.id}</span>`;
+      if (a.dead) html += '<span class="dead-badge">[dead]</span>';
       if (a.drives && Object.keys(a.drives).length) {
         const parts = Object.entries(a.drives)
           .sort(([k1], [k2]) => k1.localeCompare(k2))

@@ -98,6 +98,11 @@ type Agent struct {
 	// the framework does not interpret the keys.
 	Drives drives.State
 
+	// ParentEntityID is the EntityID of this agent's parent, or
+	// world.NoAgent for the root creator. Used by the lineage
+	// overlay and by Die's inheritance logic.
+	ParentEntityID world.EntityID
+
 	// inbox holds Heard events delivered by Speak from other
 	// agents in the same world. Drained into Perception.Heard by
 	// the sim on each step.

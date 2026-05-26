@@ -19,6 +19,11 @@ const (
 	// it as opaque - the sim layer reads these events on load to
 	// rebuild each agent's macro map.
 	EventDefineTool EventKind = "define_tool"
+
+	// EventDie records an agent calling the Die tool. The agent's
+	// entity is soft-destroyed and removed from the runtime roster;
+	// any children inherit a memory digest before the event lands.
+	EventDie EventKind = "die"
 )
 
 // Event is an immutable record of a single mutation. The full event

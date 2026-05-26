@@ -46,6 +46,8 @@ type AgentInfo struct {
 	Name      string
 	IsCreator bool
 	Drives    map[string]float64
+	ParentID  uint64
+	Dead      bool
 }
 
 // AgentLister is an optional Stepper supertype the TUI uses for
@@ -109,6 +111,7 @@ type Model struct {
 	paused          bool
 	helpVisible     bool
 	memoryVisible   bool
+	lineageVisible  bool
 	interveneActive bool
 
 	tickInterval time.Duration
@@ -337,6 +340,9 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	case Matches(key, m.keys.MemoryToggle):
 		m.memoryVisible = !m.memoryVisible
 		return m, nil
+	case Matches(key, m.keys.LineageToggle):
+		m.lineageVisible = !m.lineageVisible
+		return m, nil
 	case Matches(key, m.keys.Intervene):
 		m.interveneActive = true
 		return m.flash("intervene: c=create / d=destroy / s=speak / esc=cancel")
@@ -529,6 +535,9 @@ func (m Model) Render() string {
 	if m.memoryVisible {
 		return m.renderMemoryScreen(w, h)
 	}
+	if m.lineageVisible {
+		return m.renderLineageScreen(w, h)
+	}
 
 	info := StatusInfo{
 		WorldName:   m.focusedWorld().Name(),
@@ -619,6 +628,20 @@ func (m Model) renderMemoryScreen(width, height int) string {
 		snap = accessor.MemorySnapshot()
 	}
 	body := RenderMemoryOverlay(snap, m.styles)
+	w := width - 4
+	if w > 80 {
+		w = 80
+	}
+	box := m.styles.PaneBorder.Width(w).Render(body)
+	return lg.Place(width, height, lg.Center, lg.Center, box)
+}
+
+func (m Model) renderLineageScreen(width, height int) string {
+	var agents []AgentInfo
+	if lister, ok := m.sim.(AgentLister); ok {
+		agents = lister.Agents()
+	}
+	body := RenderLineage(agents, m.styles)
 	w := width - 4
 	if w > 80 {
 		w = 80

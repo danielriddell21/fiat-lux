@@ -6,43 +6,45 @@ package tui
 // bindings whose actions exist are wired up; the rest are placeholders
 // so the help overlay can advertise them.
 type KeyMap struct {
-	Quit         []string
-	TogglePause  []string
-	Help         []string
-	Save         []string
-	FocusNext    []string
-	FocusPrev    []string
-	WorldNext    []string
-	WorldPrev    []string
-	SpeedUp      []string
-	SpeedDown    []string
-	MemoryToggle []string
-	Intervene    []string
-	DebugCreate  []string
-	DebugDestroy []string
-	DebugRelate  []string
-	DebugAdvance []string
+	Quit          []string
+	TogglePause   []string
+	Help          []string
+	Save          []string
+	FocusNext     []string
+	FocusPrev     []string
+	WorldNext     []string
+	WorldPrev     []string
+	SpeedUp       []string
+	SpeedDown     []string
+	MemoryToggle  []string
+	LineageToggle []string
+	Intervene     []string
+	DebugCreate   []string
+	DebugDestroy  []string
+	DebugRelate   []string
+	DebugAdvance  []string
 }
 
 // DefaultKeyMap returns the standard fiat-lux key bindings.
 func DefaultKeyMap() KeyMap {
 	return KeyMap{
-		Quit:         []string{"q", "ctrl+c", "esc"},
-		TogglePause:  []string{"space", " "},
-		Help:         []string{"?"},
-		Save:         []string{"s"},
-		FocusNext:    []string{"tab"},
-		FocusPrev:    []string{"shift+tab"},
-		WorldNext:    []string{"ctrl+tab", "ctrl+n"},
-		WorldPrev:    []string{"ctrl+shift+tab", "ctrl+p"},
-		SpeedUp:      []string{"+", "="},
-		SpeedDown:    []string{"-", "_"},
-		MemoryToggle: []string{"m"},
-		Intervene:    []string{"i"},
-		DebugCreate:  []string{"n"},
-		DebugDestroy: []string{"x"},
-		DebugRelate:  []string{"r"},
-		DebugAdvance: []string{"t"},
+		Quit:          []string{"q", "ctrl+c", "esc"},
+		TogglePause:   []string{"space", " "},
+		Help:          []string{"?"},
+		Save:          []string{"s"},
+		FocusNext:     []string{"tab"},
+		FocusPrev:     []string{"shift+tab"},
+		WorldNext:     []string{"ctrl+tab", "ctrl+n"},
+		WorldPrev:     []string{"ctrl+shift+tab", "ctrl+p"},
+		SpeedUp:       []string{"+", "="},
+		SpeedDown:     []string{"-", "_"},
+		MemoryToggle:  []string{"m"},
+		LineageToggle: []string{"l"},
+		Intervene:     []string{"i"},
+		DebugCreate:   []string{"n"},
+		DebugDestroy:  []string{"x"},
+		DebugRelate:   []string{"r"},
+		DebugAdvance:  []string{"t"},
 	}
 }
 

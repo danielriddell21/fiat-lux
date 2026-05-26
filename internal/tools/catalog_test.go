@@ -26,7 +26,7 @@ func TestDefaultRegistry_HasAllNamedTools(t *testing.T) {
 	reg := Default()
 	for _, name := range []string{
 		"Create", "Modify", "Destroy", "Relate", "Unrelate",
-		"Observe", "Reflect", "SpawnAgent", "Speak", "DefineTool", "Wait",
+		"Observe", "Reflect", "SpawnAgent", "Speak", "DefineTool", "Die", "Wait",
 		"FindByType", "FindByProperty", "FindRelated",
 		"Zoom", "Unzoom",
 	} {
@@ -34,8 +34,8 @@ func TestDefaultRegistry_HasAllNamedTools(t *testing.T) {
 			t.Errorf("registry missing tool %q", name)
 		}
 	}
-	if got := len(reg.All()); got != 16 {
-		t.Errorf("registry size = %d, want 16", got)
+	if got := len(reg.All()); got != 17 {
+		t.Errorf("registry size = %d, want 17", got)
 	}
 }
 
