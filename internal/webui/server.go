@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielriddell21/fiat-lux/internal/imagegen"
 	"github.com/danielriddell21/fiat-lux/internal/sim"
 )
 
@@ -38,18 +39,23 @@ type Options struct {
 	// Logger receives lifecycle messages (start, shutdown, errors).
 	// Nil disables logging.
 	Logger *log.Logger
+
+	// ImageCache, when non-nil, makes /api/image/<hash>.png serve
+	// the bytes the multimodal generator wrote.
+	ImageCache *imagegen.Cache
 }
 
 // Server is the HTTP front door. Construct with New, attach
 // Publish to one or more Sim.Observer fields, then call Start to
 // begin listening; Shutdown cleans up.
 type Server struct {
-	provider SimProvider
-	broker   *broker
-	addr     string
-	srv      *http.Server
-	listener net.Listener
-	logger   *log.Logger
+	provider   SimProvider
+	broker     *broker
+	addr       string
+	srv        *http.Server
+	listener   net.Listener
+	logger     *log.Logger
+	imageCache *imagegen.Cache
 }
 
 // New constructs a Server. The HTTP listener is not opened until
@@ -62,15 +68,17 @@ func New(opts Options) (*Server, error) {
 		return nil, errors.New("webui: Options.Addr is required")
 	}
 	s := &Server{
-		provider: opts.Provider,
-		broker:   newBroker(),
-		addr:     opts.Addr,
-		logger:   opts.Logger,
+		provider:   opts.Provider,
+		broker:     newBroker(),
+		addr:       opts.Addr,
+		logger:     opts.Logger,
+		imageCache: opts.ImageCache,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/state", s.handleState)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.HandleFunc("/api/intervene", s.handleIntervene)
+	mux.HandleFunc("/api/image/", s.handleImage)
 	mux.Handle("/assets/", http.StripPrefix("/assets/", s.assetsHandler()))
 	mux.HandleFunc("/", s.handleIndex)
 	s.srv = &http.Server{

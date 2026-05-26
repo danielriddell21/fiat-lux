@@ -146,6 +146,37 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleImage serves bytes from the multimodal image cache at
+// /api/image/<hash>.png. The hash is whatever imagegen.Hash produced
+// for the prompt when the image was written.
+func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
+	if s.imageCache == nil {
+		http.Error(w, "image cache not configured", http.StatusNotFound)
+		return
+	}
+	const prefix = "/api/image/"
+	if len(r.URL.Path) <= len(prefix) {
+		http.NotFound(w, r)
+		return
+	}
+	name := r.URL.Path[len(prefix):]
+	// Strip extension; the cache file is stored as <hash>.bin.
+	for i := len(name) - 1; i >= 0; i-- {
+		if name[i] == '.' {
+			name = name[:i]
+			break
+		}
+	}
+	data, err := s.imageCache.GetByHash(name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(data)
+}
+
 func errString(err error) string {
 	if err == nil {
 		return ""

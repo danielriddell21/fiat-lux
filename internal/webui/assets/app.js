@@ -42,6 +42,9 @@
           selector: "node",
           style: {
             "background-color": "data(color)",
+            "background-image": "data(image)",
+            "background-fit": "cover",
+            "background-image-opacity": 1,
             "label": "data(label)",
             "color": "#e6edf3",
             "font-size": 11,
@@ -118,9 +121,10 @@
       const name = (e.properties && e.properties.name) || "";
       const label = name ? `${e.type} ${name}` : `${e.type} #${e.id}`;
       const size = isAgent ? 36 : 28;
+      const image = (e.properties && e.properties.image_url) || "";
       return {
         group: "nodes",
-        data: { id: String(e.id), label, color: colorForType(e.type), size, type: e.type },
+        data: { id: String(e.id), label, color: colorForType(e.type), size, type: e.type, image },
         classes: [isAgent ? "agent" : "", e.destroyed_at ? "destroyed" : ""].filter(Boolean).join(" "),
       };
     });
