@@ -559,14 +559,16 @@ func simByName(sims []*sim.Sim) func(string) *sim.Sim {
 }
 
 // restoreRootMemory pulls the root agent's saved memory records out
-// of the store and hands them to the freshly-built Stream. The
-// AgentID baked into restored records may not match the new root's
-// EntityID, but retrieval doesn't filter by AgentID so this is
-// harmless and keeps continuity across sessions.
+// of the store and hands them to the freshly-built Stream, then
+// reattaches any runtime-defined macros recorded in the world event
+// log. The AgentID baked into restored records may not match the
+// new root's EntityID, but retrieval doesn't filter by AgentID so
+// this is harmless and keeps continuity across sessions.
 func restoreRootMemory(ctx context.Context, dbStore *store.Store, s *sim.Sim) {
 	if s == nil || s.World == nil {
 		return
 	}
+	s.RestoreMacros(sim.MacrosFromEvents(s.World))
 	root := s.Agent()
 	if root == nil || root.Memory == nil {
 		return

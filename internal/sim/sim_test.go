@@ -10,6 +10,7 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/brain"
 	"github.com/danielriddell21/fiat-lux/internal/brain/stub"
 	"github.com/danielriddell21/fiat-lux/internal/drives"
+	"github.com/danielriddell21/fiat-lux/internal/macros"
 	"github.com/danielriddell21/fiat-lux/internal/tools"
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
@@ -310,10 +311,12 @@ type scriptedBrain struct {
 	decisions []brain.Decision
 	idx       int
 	seen      brain.Perception
+	lastDefs  []brain.ToolDef
 }
 
-func (s *scriptedBrain) Decide(_ context.Context, p brain.Perception, _ []brain.ToolDef) (brain.Decision, error) {
+func (s *scriptedBrain) Decide(_ context.Context, p brain.Perception, defs []brain.ToolDef) (brain.Decision, error) {
 	s.seen = p
+	s.lastDefs = defs
 	d := s.decisions[s.idx%len(s.decisions)]
 	s.idx++
 	return d, nil
@@ -711,4 +714,231 @@ func TestDrives_RootValidatesNaN(t *testing.T) {
 func nan() float64 {
 	var z float64
 	return z / z
+}
+
+func TestDefineTool_RegistersAndAppearsInDefs(t *testing.T) {
+	t.Parallel()
+	defineArgs := json.RawMessage(`{
+		"name": "Twin",
+		"description": "make a pair",
+		"params": ["label"],
+		"steps": [
+			{"tool": "Create", "args": {"type_label": "{{label}}"}},
+			{"tool": "Create", "args": {"type_label": "{{label}}"}}
+		]
+	}`)
+	br := &scriptedBrain{decisions: []brain.Decision{
+		{ToolCall: &brain.ToolCall{Name: "DefineTool", Args: defineArgs}},
+		{Thought: "look at my new tool"},
+	}}
+	w, _ := world.New("kosmos")
+	s, err := New(Options{World: w, Brain: br})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	root := s.RootMacros()
+	if _, ok := root.Get("Twin"); !ok {
+		t.Errorf("macro Twin not registered: %+v", root.All())
+	}
+	if _, err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var seen bool
+	for _, d := range br.lastDefs {
+		if d.Name == "Twin" {
+			seen = true
+			break
+		}
+	}
+	if !seen {
+		t.Errorf("Twin not in defs presented to brain: %+v", br.lastDefs)
+	}
+}
+
+func TestDefineTool_InvokingMacroExpandsAndExecutes(t *testing.T) {
+	t.Parallel()
+	defineArgs := json.RawMessage(`{
+		"name": "MakePlanet",
+		"params": ["name"],
+		"steps": [
+			{"tool": "Create", "args": {"type_label": "planet", "properties": {"name": "{{name}}"}}}
+		]
+	}`)
+	br := &scriptedBrain{decisions: []brain.Decision{
+		{ToolCall: &brain.ToolCall{Name: "DefineTool", Args: defineArgs}},
+		{ToolCall: &brain.ToolCall{Name: "MakePlanet", Args: json.RawMessage(`{"name":"Vesta"}`)}},
+	}}
+	w, _ := world.New("kosmos")
+	s, err := New(Options{World: w, Brain: br})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.Step(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ToolErr != nil {
+		t.Fatalf("macro invocation: %v", res.ToolErr)
+	}
+	var found bool
+	for _, e := range w.Entities() {
+		if e.TypeLabel != "planet" {
+			continue
+		}
+		if e.Properties["name"] == "Vesta" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected planet 'Vesta' after macro expansion; entities=%v", w.Entities())
+	}
+}
+
+func TestDefineTool_PersistedToEventLog(t *testing.T) {
+	t.Parallel()
+	defineArgs := json.RawMessage(`{
+		"name": "Note",
+		"steps": [{"tool": "Create", "args": {"type_label": "note"}}]
+	}`)
+	br := &scriptedBrain{decisions: []brain.Decision{
+		{ToolCall: &brain.ToolCall{Name: "DefineTool", Args: defineArgs}},
+	}}
+	w, _ := world.New("kosmos")
+	s, err := New(Options{World: w, Brain: br})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var defined bool
+	for _, ev := range w.Events() {
+		if ev.Kind == world.EventDefineTool {
+			defined = true
+			if _, ok := ev.Props["macro"]; !ok {
+				t.Errorf("EventDefineTool missing macro prop: %+v", ev)
+			}
+		}
+	}
+	if !defined {
+		t.Errorf("no EventDefineTool in event log")
+	}
+}
+
+func TestMacrosFromEvents_RoundTrip(t *testing.T) {
+	t.Parallel()
+	defineArgs := json.RawMessage(`{
+		"name": "Echo",
+		"params": ["msg"],
+		"steps": [{"tool": "Create", "args": {"type_label": "note", "properties": {"msg": "{{msg}}"}}}]
+	}`)
+	br := &scriptedBrain{decisions: []brain.Decision{
+		{ToolCall: &brain.ToolCall{Name: "DefineTool", Args: defineArgs}},
+	}}
+	w, _ := world.New("kosmos")
+	s, _ := New(Options{World: w, Brain: br})
+	_, _ = s.Step(context.Background())
+	restored := MacrosFromEvents(w)
+	if _, ok := restored.Get("Echo"); !ok {
+		t.Errorf("restore missed Echo macro: %+v", restored.All())
+	}
+}
+
+func TestSpawnAgent_ChildInheritsMacros(t *testing.T) {
+	t.Parallel()
+	defineArgs := json.RawMessage(`{
+		"name": "Mark",
+		"steps": [{"tool": "Create", "args": {"type_label": "marker"}}]
+	}`)
+	spawnArgs := json.RawMessage(`{
+		"name": "child",
+		"system_prompt": "carry the macros",
+		"brain_config": {"provider": "stub"}
+	}`)
+	creator := &scriptedBrain{decisions: []brain.Decision{
+		{ToolCall: &brain.ToolCall{Name: "DefineTool", Args: defineArgs}},
+		{ToolCall: &brain.ToolCall{Name: "SpawnAgent", Args: spawnArgs}},
+	}}
+	childBrain := &scriptedBrain{decisions: []brain.Decision{{Thought: "ok"}}}
+	factory := func(_ context.Context, _ string) (brain.Brain, error) { return childBrain, nil }
+	w, _ := world.New("kosmos")
+	s, err := New(Options{World: w, Brain: creator, BrainFactory: factory})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Agents()) != 2 {
+		t.Fatalf("agents = %d, want 2", len(s.Agents()))
+	}
+	if _, err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var seen bool
+	for _, d := range childBrain.lastDefs {
+		if d.Name == "Mark" {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Errorf("child did not inherit Mark macro; defs=%+v", childBrain.lastDefs)
+	}
+}
+
+func TestSpawnAgent_ChildSkipsMacrosWhenOptedOut(t *testing.T) {
+	t.Parallel()
+	defineArgs := json.RawMessage(`{
+		"name": "Mark",
+		"steps": [{"tool": "Create", "args": {"type_label": "marker"}}]
+	}`)
+	spawnArgs := json.RawMessage(`{
+		"name": "child",
+		"system_prompt": "no macros",
+		"brain_config": {"provider": "stub"},
+		"inherit_macros": false
+	}`)
+	creator := &scriptedBrain{decisions: []brain.Decision{
+		{ToolCall: &brain.ToolCall{Name: "DefineTool", Args: defineArgs}},
+		{ToolCall: &brain.ToolCall{Name: "SpawnAgent", Args: spawnArgs}},
+	}}
+	childBrain := &scriptedBrain{decisions: []brain.Decision{{Thought: "ok"}}}
+	factory := func(_ context.Context, _ string) (brain.Brain, error) { return childBrain, nil }
+	w, _ := world.New("kosmos")
+	s, err := New(Options{World: w, Brain: creator, BrainFactory: factory})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = s.Step(context.Background())
+	_, _ = s.Step(context.Background())
+	_, _ = s.Step(context.Background())
+	for _, d := range childBrain.lastDefs {
+		if d.Name == "Mark" {
+			t.Errorf("opt-out child received inherited macro: %+v", childBrain.lastDefs)
+		}
+	}
+}
+
+func TestRestoreMacros_AttachesToRoot(t *testing.T) {
+	t.Parallel()
+	w, _ := world.New("kosmos")
+	s, _ := New(Options{World: w, Brain: stub.New(0, 0, tools.Default())})
+	set := macros.NewSet()
+	_ = set.AddTrusted(macros.Macro{
+		Name:  "Restored",
+		Steps: []macros.Step{{Tool: "Create", Args: json.RawMessage(`{"type_label":"x"}`)}},
+	})
+	s.RestoreMacros(set)
+	if _, ok := s.RootMacros().Get("Restored"); !ok {
+		t.Errorf("Restored macro not present after RestoreMacros")
+	}
 }

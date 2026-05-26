@@ -345,6 +345,25 @@ func (w *World) Unrelate(by AgentID, id RelationshipID) error {
 	return nil
 }
 
+// EmitInfo appends a non-mutating event kind to the log. It is the
+// hook the sim layer uses to persist state that lives above the
+// world layer (e.g. runtime-defined macros) while keeping the event
+// log the single source of truth. Returns the assigned event ID.
+//
+// The world treats info events as opaque: ApplyEventForLoad records
+// them but does not interpret Props. Callers must restrict kind to
+// known info-only kinds (currently EventDefineTool).
+func (w *World) EmitInfo(by AgentID, kind EventKind, props Properties) EventID {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.appendEvent(Event{
+		Kind:  kind,
+		Agent: by,
+		Props: props.Clone(),
+	})
+	return w.nextEvent - 1
+}
+
 // NextEntityID returns the EntityID that would be assigned by the
 // next call to Create. Exposed for the store's load path; not part
 // of the simulation contract.
@@ -454,6 +473,10 @@ func (w *World) ApplyEventForLoad(e Event) error {
 		}
 		t := e.Tick
 		rel.DestroyedAt = &t
+	case EventDefineTool:
+		// Sim-layer state; the world records the event so the log
+		// stays the single source of truth, but does not interpret
+		// the macro definition itself.
 	default:
 		return fmt.Errorf("world: unknown event kind %q", e.Kind)
 	}

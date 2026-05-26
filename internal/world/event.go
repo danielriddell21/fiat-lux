@@ -13,6 +13,12 @@ const (
 	EventRelate    EventKind = "relate"
 	EventUnrelate  EventKind = "unrelate"
 	EventTickStart EventKind = "tick_start"
+
+	// EventDefineTool records an agent's runtime macro definition.
+	// The macro JSON is carried in Props["macro"]; the world treats
+	// it as opaque - the sim layer reads these events on load to
+	// rebuild each agent's macro map.
+	EventDefineTool EventKind = "define_tool"
 )
 
 // Event is an immutable record of a single mutation. The full event
