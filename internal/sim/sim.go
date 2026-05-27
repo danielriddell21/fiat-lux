@@ -11,6 +11,7 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/agent"
 	"github.com/danielriddell21/fiat-lux/internal/brain"
 	"github.com/danielriddell21/fiat-lux/internal/drives"
+	"github.com/danielriddell21/fiat-lux/internal/imagegen"
 	"github.com/danielriddell21/fiat-lux/internal/macros"
 	"github.com/danielriddell21/fiat-lux/internal/memory"
 	"github.com/danielriddell21/fiat-lux/internal/tools"
@@ -73,6 +74,11 @@ type Sim struct {
 	// Per-world write serialisation lives on world.World already
 	// (per-world RWMutex); spawn-time bookkeeping is serialised
 	// here on Sim.mu.
+
+	// multimodal, when non-nil, attaches generated images to Create
+	// events asynchronously. Nil keeps the sim image-free.
+	multimodal *MultimodalOptions
+	imageWG    sync.WaitGroup
 }
 
 // agentRuntime holds the per-agent state the sim tracks alongside
@@ -155,6 +161,37 @@ type Options struct {
 
 	// Observer is an optional hook called with each StepResult.
 	Observer func(StepResult)
+
+	// Multimodal, when non-nil, attaches an image to every Create
+	// event whose properties carry at least MinPropsCount entries.
+	// The image is generated asynchronously and the entity is
+	// updated via World.Modify; replay does not regenerate.
+	Multimodal *MultimodalOptions
+}
+
+// MultimodalOptions wires an image generator into the sim's Create
+// path. The struct lives in the sim package so callers don't have to
+// import internal/imagegen just to disable the feature.
+type MultimodalOptions struct {
+	// Generator is required. Nil disables image generation.
+	Generator imagegen.Generator
+
+	// Cache stores rendered bytes keyed by prompt hash. Nil disables
+	// caching - every Create hits the provider.
+	Cache *imagegen.Cache
+
+	// PromptBuilder maps (type_label, properties) to a prompt string.
+	// Nil uses imagegen.DefaultPromptBuilder.
+	PromptBuilder imagegen.PromptBuilder
+
+	// MinPropsCount gates generation: an entity whose Properties map
+	// has fewer than this many keys is skipped. Defaults to 1.
+	MinPropsCount int
+
+	// URLBase is prefixed to the image's stored path when writing
+	// image_url onto the entity. Defaults to "/api/image/" so the
+	// embedded webui serves it directly.
+	URLBase string
 }
 
 // DefaultSystemPrompt is the canonical instruction passed to the
@@ -217,6 +254,7 @@ func New(opts Options) (*Sim, error) {
 		maxAgents:              maxAgents,
 		maxSpawnDepth:          maxDepth,
 		perAgentRT:             make(map[world.EntityID]*agentRuntime),
+		multimodal:             opts.Multimodal,
 	}
 
 	if err := opts.Drives.Validate(); err != nil {
@@ -392,6 +430,23 @@ func (s *Sim) IsDead(id world.EntityID) bool {
 	return rt != nil && rt.dead
 }
 
+// SetMultimodal swaps in (or clears, when nil) the multimodal
+// options after construction. The caller is responsible for not
+// racing this with concurrent Steps.
+func (s *Sim) SetMultimodal(opts *MultimodalOptions) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.multimodal = opts
+}
+
+// Multimodal returns the configured multimodal options, or nil when
+// image generation is disabled.
+func (s *Sim) Multimodal() *MultimodalOptions {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.multimodal
+}
+
 // Step picks the next agent in round-robin order and runs one
 // decision cycle for it. The world tick advances when the cycle
 // wraps back to the first agent.
@@ -466,6 +521,9 @@ func (s *Sim) stepAgent(ctx context.Context, ag *agent.Agent, rt *agentRuntime) 
 		res.ToolResult = out
 		if terr != nil {
 			res.ToolErr = terr
+		}
+		if terr == nil && decision.ToolCall.Name == "Create" {
+			s.maybeGenerateImage(ag.EntityID, ag.SeenEventID)
 		}
 	}
 	if err := ag.RememberAction(ctx, tick, res.Thought, res.ToolName, res.ToolResult); err != nil && res.ToolErr == nil {
@@ -818,6 +876,7 @@ func (s *Sim) publish(res StepResult) {
 
 // Close releases every attached brain. Safe to call once.
 func (s *Sim) Close() error {
+	s.imageWG.Wait()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var firstErr error

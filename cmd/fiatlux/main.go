@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"sort"
 	"strconv"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -30,6 +31,9 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/brain/openai"
 	"github.com/danielriddell21/fiat-lux/internal/brain/openaicompat"
 	"github.com/danielriddell21/fiat-lux/internal/brain/stub"
+	"github.com/danielriddell21/fiat-lux/internal/imagegen"
+	imageopenai "github.com/danielriddell21/fiat-lux/internal/imagegen/openai"
+	imageopenaicompat "github.com/danielriddell21/fiat-lux/internal/imagegen/openaicompat"
 	"github.com/danielriddell21/fiat-lux/internal/memory"
 	"github.com/danielriddell21/fiat-lux/internal/sim"
 	"github.com/danielriddell21/fiat-lux/internal/store"
@@ -181,6 +185,8 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	configPath := fs.String("config", "", "YAML config for a multi-world universe (overrides --brain)")
 	webAddr := fs.String("web-addr", "", "address to bind the optional web viewer (e.g. 127.0.0.1:8080)")
 	saveMode := fs.String("save-mode", "", "persistence cadence: manual | interval:<duration> (e.g. interval:30s)")
+	multimodalSpec := fs.String("multimodal", "", "image generator: '' (use YAML or disabled) | none | openai[:model] | openaicompat:<base_url>::<model>")
+	imageCacheDir := fs.String("image-cache", "", "directory for generated images (default: $XDG_CACHE_HOME/fiatlux/images)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -210,12 +216,15 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	}
 
 	var (
-		stepper      tui.Stepper
-		simProvider  webui.SimProvider
-		yamlWebAddr  string
-		yamlSaveMode string
-		attachOnSims []*sim.Sim // sims whose Observer the webui will subscribe to
-		simForWorld  func(name string) *sim.Sim
+		stepper          tui.Stepper
+		simProvider      webui.SimProvider
+		yamlWebAddr      string
+		yamlSaveMode     string
+		yamlMultimodal   string
+		yamlImageCache   string
+		yamlMultimodalMM int
+		attachOnSims     []*sim.Sim // sims whose Observer the webui will subscribe to
+		simForWorld      func(name string) *sim.Sim
 	)
 	switch {
 	case *configPath != "":
@@ -244,6 +253,9 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		if cfg != nil {
 			yamlWebAddr = cfg.Web.Addr
 			yamlSaveMode = cfg.Save.Mode
+			yamlMultimodal = cfg.Multimodal.Spec()
+			yamlImageCache = cfg.Multimodal.CacheDir
+			yamlMultimodalMM = cfg.Multimodal.MinPropsCount
 		}
 	case *brainSpec != "none":
 		embedder, err := buildEmbedder(*embedderSpec)
@@ -270,13 +282,37 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		st = &fullSaver{store: dbStore, simForWorld: simForWorld}
 	}
 
+	// Resolve the multimodal spec: CLI flag wins, then YAML. Blank
+	// CLI means "use YAML"; explicit "none" disables even when YAML
+	// would enable it.
+	resolvedMultimodal := *multimodalSpec
+	if resolvedMultimodal == "" {
+		resolvedMultimodal = yamlMultimodal
+	}
+	resolvedCacheDir := *imageCacheDir
+	if resolvedCacheDir == "" {
+		resolvedCacheDir = yamlImageCache
+	}
+	mmOpts, imageCache, err := buildMultimodal(resolvedMultimodal, resolvedCacheDir)
+	if err != nil {
+		return fmt.Errorf("multimodal: %w", err)
+	}
+	if mmOpts != nil {
+		if yamlMultimodalMM > 0 {
+			mmOpts.MinPropsCount = yamlMultimodalMM
+		}
+		for _, s := range attachOnSims {
+			s.SetMultimodal(mmOpts)
+		}
+	}
+
 	// Resolve the web address: CLI flag wins, then YAML config.
 	resolvedWebAddr := *webAddr
 	if resolvedWebAddr == "" {
 		resolvedWebAddr = yamlWebAddr
 	}
 	if resolvedWebAddr != "" && simProvider != nil {
-		stop, err := startWebUI(ctx, resolvedWebAddr, simProvider, attachOnSims, stderr)
+		stop, err := startWebUI(ctx, resolvedWebAddr, simProvider, attachOnSims, imageCache, stderr)
 		if err != nil {
 			return err
 		}
@@ -322,12 +358,13 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 // startWebUI launches the embedded HTTP viewer and attaches its
 // broker to each sim's Observer. Returns a stop func the caller
 // must invoke before exiting so the listener releases its port.
-func startWebUI(ctx context.Context, addr string, provider webui.SimProvider, attachOn []*sim.Sim, stderr io.Writer) (func(), error) {
+func startWebUI(ctx context.Context, addr string, provider webui.SimProvider, attachOn []*sim.Sim, imageCache *imagegen.Cache, stderr io.Writer) (func(), error) {
 	logger := log.New(stderr, "", log.LstdFlags)
 	server, err := webui.New(webui.Options{
-		Addr:     addr,
-		Provider: provider,
-		Logger:   logger,
+		Addr:       addr,
+		Provider:   provider,
+		Logger:     logger,
+		ImageCache: imageCache,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("web ui: %w", err)
@@ -360,6 +397,65 @@ func startWebUI(ctx context.Context, addr string, provider webui.SimProvider, at
 			s.Observer = nil
 		}
 	}, nil
+}
+
+// buildMultimodal parses --multimodal=<spec> into a MultimodalOptions
+// + on-disk Cache. Returns (nil, nil, nil) for "none". The cache is
+// shared between the sim (writes) and the web UI (reads).
+//
+// Specs:
+//
+//	none                                 - disabled (default)
+//	openai[:<model>]                     - OpenAI Images (env: OPENAI_API_KEY)
+//	openaicompat:<base_url>::<model>     - any OpenAI-compatible images endpoint
+//	                                       (LM Studio, llama.cpp, vLLM, openedai-images, ...).
+//	                                       APIKey is optional; set via OPENAI_API_KEY when needed.
+func buildMultimodal(spec, cacheDir string) (*sim.MultimodalOptions, *imagegen.Cache, error) {
+	if spec == "" || spec == "none" {
+		return nil, nil, nil
+	}
+	dir := cacheDir
+	if dir == "" {
+		base, err := os.UserCacheDir()
+		if err != nil || base == "" {
+			base = filepath.Join(os.TempDir(), "fiatlux-cache")
+		}
+		dir = filepath.Join(base, "fiatlux", "images")
+	}
+	cache := imagegen.NewCache(dir)
+
+	switch {
+	case strings.HasPrefix(spec, "openaicompat:"):
+		baseURL, model, ok := strings.Cut(strings.TrimPrefix(spec, "openaicompat:"), "::")
+		if !ok || baseURL == "" || model == "" {
+			return nil, nil, fmt.Errorf("multimodal: openaicompat spec must be openaicompat:<base_url>::<model>, got %q", spec)
+		}
+		client, err := imageopenaicompat.New(imageopenaicompat.Options{
+			BaseURL: baseURL,
+			APIKey:  os.Getenv("OPENAI_API_KEY"), // optional
+			Model:   model,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return &sim.MultimodalOptions{Generator: client, Cache: cache}, cache, nil
+	case spec == "openai" || strings.HasPrefix(spec, "openai:"):
+		model := ""
+		if rest, ok := strings.CutPrefix(spec, "openai:"); ok {
+			model = rest
+		}
+		apiKey := os.Getenv("OPENAI_API_KEY")
+		if apiKey == "" {
+			return nil, nil, errors.New("OPENAI_API_KEY required for --multimodal=openai")
+		}
+		client, err := imageopenai.New(imageopenai.Options{APIKey: apiKey, Model: model})
+		if err != nil {
+			return nil, nil, err
+		}
+		return &sim.MultimodalOptions{Generator: client, Cache: cache}, cache, nil
+	default:
+		return nil, nil, fmt.Errorf("unknown multimodal spec %q (try none | openai[:<model>] | openaicompat:<url>::<model>)", spec)
+	}
 }
 
 // chainObservers composes two Sim.Observer-shaped callbacks. nil
@@ -1209,7 +1305,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) error {
 	if resolvedWebAddr == "" {
 		return errors.New("serve: --web-addr is required (set the flag or YAML 'web.addr')")
 	}
-	stop, err := startWebUI(ctx, resolvedWebAddr, simProvider, attachOnSims, stderr)
+	stop, err := startWebUI(ctx, resolvedWebAddr, simProvider, attachOnSims, nil, stderr)
 	if err != nil {
 		return err
 	}
