@@ -161,6 +161,99 @@ func TestLoadYAML_RejectsEmptyWorlds(t *testing.T) {
 	}
 }
 
+func TestMultimodalConfig_Spec(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		cfg  MultimodalConfig
+		want string
+	}{
+		{"disabled", MultimodalConfig{}, ""},
+		{"openai bare", MultimodalConfig{Provider: "openai"}, "openai"},
+		{"openai with model", MultimodalConfig{Provider: "openai", Model: "dall-e-3"}, "openai:dall-e-3"},
+		{
+			"openaicompat full",
+			MultimodalConfig{Provider: "openaicompat", BaseURL: "http://localhost:1234/v1", Model: "sdxl"},
+			"openaicompat:http://localhost:1234/v1::sdxl",
+		},
+		{"openaicompat missing url", MultimodalConfig{Provider: "openaicompat", Model: "sdxl"}, ""},
+		{"openaicompat missing model", MultimodalConfig{Provider: "openaicompat", BaseURL: "u"}, ""},
+		{"unknown provider", MultimodalConfig{Provider: "bogus"}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.cfg.Spec(); got != c.want {
+				t.Errorf("Spec() = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestLoadYAML_ParsesMultimodal(t *testing.T) {
+	t.Parallel()
+	src := `
+worlds:
+  - name: kosmos
+    agent:
+      brain:
+        provider: stub
+multimodal:
+  provider: openaicompat
+  base_url: http://127.0.0.1:1234/v1
+  model: sdxl
+  cache_dir: /tmp/fl-images
+  min_props_count: 2
+`
+	cfg, err := LoadYAML(strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Multimodal.Spec(); got != "openaicompat:http://127.0.0.1:1234/v1::sdxl" {
+		t.Errorf("Spec = %q", got)
+	}
+	if cfg.Multimodal.CacheDir != "/tmp/fl-images" {
+		t.Errorf("CacheDir = %q", cfg.Multimodal.CacheDir)
+	}
+	if cfg.Multimodal.MinPropsCount != 2 {
+		t.Errorf("MinPropsCount = %d", cfg.Multimodal.MinPropsCount)
+	}
+}
+
+func TestLoadYAML_RejectsMultimodalMissingBaseURL(t *testing.T) {
+	t.Parallel()
+	src := `
+worlds:
+  - name: kosmos
+    agent:
+      brain:
+        provider: stub
+multimodal:
+  provider: openaicompat
+  model: sdxl
+`
+	_, err := LoadYAML(strings.NewReader(src))
+	if err == nil {
+		t.Error("expected error for openaicompat without base_url")
+	}
+}
+
+func TestLoadYAML_RejectsUnknownMultimodalProvider(t *testing.T) {
+	t.Parallel()
+	src := `
+worlds:
+  - name: kosmos
+    agent:
+      brain:
+        provider: stub
+multimodal:
+  provider: bogus
+`
+	_, err := LoadYAML(strings.NewReader(src))
+	if err == nil {
+		t.Error("expected error for unknown multimodal.provider")
+	}
+}
+
 func TestLoadYAML_RejectsDuplicateWorldNames(t *testing.T) {
 	t.Parallel()
 	src := `

@@ -31,6 +31,11 @@ type Config struct {
 	// user presses 's' to save (legacy behaviour). The --save-mode CLI
 	// flag takes precedence when both set.
 	Save SaveConfig `yaml:"save,omitempty"`
+
+	// Multimodal, when set, attaches an image generator to every
+	// world. The --multimodal CLI flag takes precedence when both
+	// are supplied; the --image-cache flag overrides CacheDir.
+	Multimodal MultimodalConfig `yaml:"multimodal,omitempty"`
 }
 
 // WebConfig is the YAML form of the web viewer options.
@@ -46,6 +51,54 @@ type SaveConfig struct {
 	//   "" / "manual"         - user-triggered save only (default)
 	//   "interval:<duration>" - periodic background save, e.g. "30s"
 	Mode string `yaml:"mode,omitempty"`
+}
+
+// MultimodalConfig is the YAML form of the image generator options.
+// An empty Provider disables image generation.
+type MultimodalConfig struct {
+	// Provider selects the generator. Accepted: "openai" |
+	// "openaicompat". Empty disables.
+	Provider string `yaml:"provider,omitempty"`
+
+	// Model is the image model name (e.g. "gpt-image-1", "dall-e-3",
+	// or a local server's model id). Optional for "openai".
+	Model string `yaml:"model,omitempty"`
+
+	// BaseURL is required for "openaicompat" and ignored for
+	// "openai".
+	BaseURL string `yaml:"base_url,omitempty"`
+
+	// CacheDir overrides the default on-disk cache location
+	// ($XDG_CACHE_HOME/fiatlux/images). The --image-cache CLI flag
+	// takes precedence when both are set.
+	CacheDir string `yaml:"cache_dir,omitempty"`
+
+	// MinPropsCount skips image generation for entities with fewer
+	// than this many properties. Zero defaults to 1.
+	MinPropsCount int `yaml:"min_props_count,omitempty"`
+}
+
+// Spec returns the CLI-equivalent --multimodal spec for this config,
+// or "" when the provider is empty (disabled). The string is
+// suitable for handing to the same parser the --multimodal flag
+// uses, so YAML and CLI paths converge.
+func (m MultimodalConfig) Spec() string {
+	switch m.Provider {
+	case "":
+		return ""
+	case "openai":
+		if m.Model == "" {
+			return "openai"
+		}
+		return "openai:" + m.Model
+	case "openaicompat":
+		if m.BaseURL == "" || m.Model == "" {
+			return ""
+		}
+		return "openaicompat:" + m.BaseURL + "::" + m.Model
+	default:
+		return ""
+	}
 }
 
 // WorldConfig is one world's spec.
@@ -119,7 +172,27 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("sim: world %q has no agent.brain spec", w.Name)
 		}
 	}
+	if err := c.Multimodal.validate(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (m MultimodalConfig) validate() error {
+	switch m.Provider {
+	case "", "openai":
+		return nil
+	case "openaicompat":
+		if m.BaseURL == "" {
+			return errors.New("sim: multimodal.base_url required for provider=openaicompat")
+		}
+		if m.Model == "" {
+			return errors.New("sim: multimodal.model required for provider=openaicompat")
+		}
+		return nil
+	default:
+		return fmt.Errorf("sim: unknown multimodal.provider %q (try openai | openaicompat)", m.Provider)
+	}
 }
 
 // WorldLoader returns a pre-existing world by name. BuildUniverse

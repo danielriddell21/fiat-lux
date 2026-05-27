@@ -185,7 +185,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	configPath := fs.String("config", "", "YAML config for a multi-world universe (overrides --brain)")
 	webAddr := fs.String("web-addr", "", "address to bind the optional web viewer (e.g. 127.0.0.1:8080)")
 	saveMode := fs.String("save-mode", "", "persistence cadence: manual | interval:<duration> (e.g. interval:30s)")
-	multimodalSpec := fs.String("multimodal", "none", "image generator: none | openai[:model] | openaicompat:<base_url>::<model>")
+	multimodalSpec := fs.String("multimodal", "", "image generator: '' (use YAML or disabled) | none | openai[:model] | openaicompat:<base_url>::<model>")
 	imageCacheDir := fs.String("image-cache", "", "directory for generated images (default: $XDG_CACHE_HOME/fiatlux/images)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -216,12 +216,15 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	}
 
 	var (
-		stepper      tui.Stepper
-		simProvider  webui.SimProvider
-		yamlWebAddr  string
-		yamlSaveMode string
-		attachOnSims []*sim.Sim // sims whose Observer the webui will subscribe to
-		simForWorld  func(name string) *sim.Sim
+		stepper          tui.Stepper
+		simProvider      webui.SimProvider
+		yamlWebAddr      string
+		yamlSaveMode     string
+		yamlMultimodal   string
+		yamlImageCache   string
+		yamlMultimodalMM int
+		attachOnSims     []*sim.Sim // sims whose Observer the webui will subscribe to
+		simForWorld      func(name string) *sim.Sim
 	)
 	switch {
 	case *configPath != "":
@@ -250,6 +253,9 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		if cfg != nil {
 			yamlWebAddr = cfg.Web.Addr
 			yamlSaveMode = cfg.Save.Mode
+			yamlMultimodal = cfg.Multimodal.Spec()
+			yamlImageCache = cfg.Multimodal.CacheDir
+			yamlMultimodalMM = cfg.Multimodal.MinPropsCount
 		}
 	case *brainSpec != "none":
 		embedder, err := buildEmbedder(*embedderSpec)
@@ -276,14 +282,25 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		st = &fullSaver{store: dbStore, simForWorld: simForWorld}
 	}
 
-	// Configure multimodal image generation if requested. The cache
-	// must outlive the sims so the web UI can keep serving images
-	// after a sim closes.
-	mmOpts, imageCache, err := buildMultimodal(*multimodalSpec, *imageCacheDir)
+	// Resolve the multimodal spec: CLI flag wins, then YAML. Blank
+	// CLI means "use YAML"; explicit "none" disables even when YAML
+	// would enable it.
+	resolvedMultimodal := *multimodalSpec
+	if resolvedMultimodal == "" {
+		resolvedMultimodal = yamlMultimodal
+	}
+	resolvedCacheDir := *imageCacheDir
+	if resolvedCacheDir == "" {
+		resolvedCacheDir = yamlImageCache
+	}
+	mmOpts, imageCache, err := buildMultimodal(resolvedMultimodal, resolvedCacheDir)
 	if err != nil {
 		return fmt.Errorf("multimodal: %w", err)
 	}
 	if mmOpts != nil {
+		if yamlMultimodalMM > 0 {
+			mmOpts.MinPropsCount = yamlMultimodalMM
+		}
 		for _, s := range attachOnSims {
 			s.SetMultimodal(mmOpts)
 		}
