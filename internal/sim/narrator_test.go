@@ -77,3 +77,46 @@ func TestNarrator_DisabledWhenNil(t *testing.T) {
 		t.Errorf("expected no chapters when narrator nil")
 	}
 }
+
+func TestSetNarrator_InstallsAndClearsAfterConstruction(t *testing.T) {
+	t.Parallel()
+	w, _ := world.New("kosmos")
+	creator := &scriptedBrain{decisions: []brain.Decision{
+		{ToolCall: &brain.ToolCall{Name: "Create", Args: json.RawMessage(`{"type_label":"x"}`)}},
+		{ToolCall: &brain.ToolCall{Name: "Create", Args: json.RawMessage(`{"type_label":"y"}`)}},
+		{ToolCall: &brain.ToolCall{Name: "Create", Args: json.RawMessage(`{"type_label":"z"}`)}},
+	}}
+	s, _ := New(Options{World: w, Brain: creator})
+	defer s.Close()
+
+	nb := &fakeNarratorBrain{thought: "the void stirs"}
+	n, err := narrator.New(narrator.Options{Brain: nb, IntervalTicks: 1, MinEvents: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetNarrator(n)
+
+	for range 3 {
+		if _, err := s.Step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if nb.called == 0 {
+		t.Error("expected narrator to write at least one chapter after SetNarrator")
+	}
+	if len(s.Annals()) == 0 {
+		t.Error("annals empty after SetNarrator")
+	}
+
+	// Clearing should silence the narrator on subsequent steps.
+	before := nb.called
+	s.SetNarrator(nil)
+	for range 3 {
+		if _, err := s.Step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if nb.called != before {
+		t.Errorf("narrator brain called after SetNarrator(nil): before=%d after=%d", before, nb.called)
+	}
+}

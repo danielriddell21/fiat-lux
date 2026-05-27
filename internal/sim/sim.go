@@ -459,6 +459,20 @@ func (s *Sim) Multimodal() *MultimodalOptions {
 	return s.multimodal
 }
 
+// SetNarrator swaps in (or clears, when nil) the chronicler after
+// construction. The previously-installed narrator, if any, is closed
+// so its brain releases resources. Caller must NOT race this with
+// concurrent Steps.
+func (s *Sim) SetNarrator(n *narrator.Narrator) {
+	s.mu.Lock()
+	prev := s.narrator
+	s.narrator = n
+	s.mu.Unlock()
+	if prev != nil && prev != n {
+		_ = prev.Close()
+	}
+}
+
 // Step picks the next agent in round-robin order and runs one
 // decision cycle for it. The world tick advances when the cycle
 // wraps back to the first agent.
