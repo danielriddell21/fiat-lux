@@ -9,6 +9,7 @@ import (
 
 	"github.com/danielriddell21/fiat-lux/internal/brain"
 	"github.com/danielriddell21/fiat-lux/internal/brain/stub"
+	"github.com/danielriddell21/fiat-lux/internal/drives"
 	"github.com/danielriddell21/fiat-lux/internal/tools"
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
@@ -590,4 +591,124 @@ func TestClose_ClosesBrain(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Errorf("Close: %v", err)
 	}
+}
+
+func TestDrives_RootSurfacesInPerception(t *testing.T) {
+	t.Parallel()
+	br := &scriptedBrain{decisions: []brain.Decision{{Thought: "ok"}}}
+	w, _ := world.New("kosmos")
+	s, err := New(Options{
+		World:  w,
+		Brain:  br,
+		Drives: drives.State{"novelty": 0.7, "growth": 0.3},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if br.seen.Drives["novelty"] != 0.7 || br.seen.Drives["growth"] != 0.3 {
+		t.Errorf("perception.Drives = %v, want novelty:0.7 growth:0.3", br.seen.Drives)
+	}
+}
+
+func TestDrives_PersistedOnAgentEntity(t *testing.T) {
+	t.Parallel()
+	w, _ := world.New("kosmos")
+	br := stub.New(1, 1, tools.Default())
+	_, err := New(Options{World: w, Brain: br, Drives: drives.State{"novelty": 0.5}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ent := w.Entities()[0]
+	got, _ := ent.Properties["drives"].(map[string]any)
+	if got["novelty"] != 0.5 {
+		t.Errorf("entity drives property = %v, want novelty:0.5", got)
+	}
+}
+
+func TestDrives_ChildInheritsFromParent(t *testing.T) {
+	t.Parallel()
+	w, _ := world.New("kosmos")
+	creatorBrain := &scriptedBrain{decisions: []brain.Decision{
+		{ToolCall: &brain.ToolCall{Name: "SpawnAgent", Args: json.RawMessage(`{
+			"name": "child",
+			"system_prompt": "carry the torch",
+			"brain_config": {"provider": "stub"}
+		}`)}},
+	}}
+	childBrain := &scriptedBrain{decisions: []brain.Decision{{Thought: "ok"}}}
+	factory := func(_ context.Context, _ string) (brain.Brain, error) { return childBrain, nil }
+	s, err := New(Options{
+		World:        w,
+		Brain:        creatorBrain,
+		BrainFactory: factory,
+		Drives:       drives.State{"novelty": 0.9},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	agents := s.Agents()
+	if len(agents) != 2 {
+		t.Fatalf("agents = %d, want 2", len(agents))
+	}
+	if agents[1].Drives["novelty"] != 0.9 {
+		t.Errorf("child drives = %v, want inherited novelty:0.9", agents[1].Drives)
+	}
+}
+
+func TestDrives_ChildOverridesParent(t *testing.T) {
+	t.Parallel()
+	w, _ := world.New("kosmos")
+	creatorBrain := &scriptedBrain{decisions: []brain.Decision{
+		{ToolCall: &brain.ToolCall{Name: "SpawnAgent", Args: json.RawMessage(`{
+			"name": "child",
+			"system_prompt": "diverge",
+			"brain_config": {"provider": "stub"},
+			"drives": {"coherence": 1.0}
+		}`)}},
+	}}
+	childBrain := &scriptedBrain{decisions: []brain.Decision{{Thought: "ok"}}}
+	factory := func(_ context.Context, _ string) (brain.Brain, error) { return childBrain, nil }
+	s, err := New(Options{
+		World:        w,
+		Brain:        creatorBrain,
+		BrainFactory: factory,
+		Drives:       drives.State{"novelty": 0.9},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	child := s.Agents()[1]
+	if child.Drives["coherence"] != 1.0 {
+		t.Errorf("child drives = %v, want override coherence:1.0", child.Drives)
+	}
+	if _, ok := child.Drives["novelty"]; ok {
+		t.Errorf("child drives leaked parent novelty: %v", child.Drives)
+	}
+}
+
+func TestDrives_RootValidatesNaN(t *testing.T) {
+	t.Parallel()
+	w, _ := world.New("kosmos")
+	_, err := New(Options{
+		World:  w,
+		Brain:  stub.New(0, 0, tools.Default()),
+		Drives: drives.State{"x": nan()},
+	})
+	if err == nil {
+		t.Error("expected validation error on NaN drive weight")
+	}
+}
+
+func nan() float64 {
+	var z float64
+	return z / z
 }

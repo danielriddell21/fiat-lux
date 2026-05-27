@@ -36,6 +36,7 @@ type AgentInfo struct {
 	ID        uint64
 	Name      string
 	IsCreator bool
+	Drives    map[string]float64
 }
 
 // AgentLister is an optional Stepper supertype the TUI uses for
@@ -495,8 +496,12 @@ func (m Model) Render() string {
 	if lister, ok := m.sim.(AgentLister); ok {
 		agents := lister.Agents()
 		if len(agents) > 0 {
-			rightBody = RenderAgentsStrip(agents, lister.FocusedAgentID(), m.styles) +
-				"\n" + rightBody
+			focused := lister.FocusedAgentID()
+			header := RenderAgentsStrip(agents, focused, m.styles)
+			if drivesLine := RenderDrivesLine(agents, focused, m.styles); drivesLine != "" {
+				header += "\n" + drivesLine
+			}
+			rightBody = header + "\n" + rightBody
 		}
 	}
 

@@ -8,6 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/danielriddell21/fiat-lux/internal/drives"
 	"github.com/danielriddell21/fiat-lux/internal/memory"
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
@@ -55,9 +56,10 @@ type WorldConfig struct {
 
 // AgentConfig is the root agent's spec for a world.
 type AgentConfig struct {
-	Name         string      `yaml:"name,omitempty"`
-	SystemPrompt string      `yaml:"system_prompt,omitempty"`
-	Brain        BrainConfig `yaml:"brain"`
+	Name         string             `yaml:"name,omitempty"`
+	SystemPrompt string             `yaml:"system_prompt,omitempty"`
+	Brain        BrainConfig        `yaml:"brain"`
+	Drives       map[string]float64 `yaml:"drives,omitempty"`
 }
 
 // BrainConfig captures provider + model. Spec is an alternative
@@ -161,6 +163,7 @@ func (c *Config) BuildUniverse(
 			MaxSpawnDepth:   c.MaxSpawnDepth,
 			AgentName:       wc.Agent.Name,
 			SystemPrompt:    wc.Agent.SystemPrompt,
+			Drives:          drives.State(wc.Agent.Drives),
 		})
 		if err != nil {
 			_ = br.Close()

@@ -25,10 +25,11 @@ type StateResponse struct {
 
 // AgentSummary is a light projection of agent.Agent for the side rail.
 type AgentSummary struct {
-	ID         uint64 `json:"id"`
-	Name       string `json:"name"`
-	IsCreator  bool   `json:"is_creator"`
-	SpawnDepth int    `json:"spawn_depth"`
+	ID         uint64             `json:"id"`
+	Name       string             `json:"name"`
+	IsCreator  bool               `json:"is_creator"`
+	SpawnDepth int                `json:"spawn_depth"`
+	Drives     map[string]float64 `json:"drives,omitempty"`
 }
 
 // StepEvent is the payload pushed over SSE on every Sim.Step.
@@ -73,6 +74,7 @@ func buildState(sm *sim.Sim) StateResponse {
 			Name:       ag.Name,
 			IsCreator:  ag.SpawnDepth == 0,
 			SpawnDepth: ag.SpawnDepth,
+			Drives:     ag.Drives.Clone(),
 		}
 	}
 	return StateResponse{

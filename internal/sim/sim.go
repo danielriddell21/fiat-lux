@@ -10,6 +10,7 @@ import (
 
 	"github.com/danielriddell21/fiat-lux/internal/agent"
 	"github.com/danielriddell21/fiat-lux/internal/brain"
+	"github.com/danielriddell21/fiat-lux/internal/drives"
 	"github.com/danielriddell21/fiat-lux/internal/memory"
 	"github.com/danielriddell21/fiat-lux/internal/tools"
 	"github.com/danielriddell21/fiat-lux/internal/world"
@@ -140,6 +141,11 @@ type Options struct {
 	// MaxSpawnDepth caps the spawn graph height; 0 means 3.
 	MaxSpawnDepth int
 
+	// Drives is the root agent's intrinsic motivational state, woven
+	// into every Perception. Nil means no drives are exposed. Spawned
+	// children inherit unless SpawnAgent overrides.
+	Drives drives.State
+
 	// Observer is an optional hook called with each StepResult.
 	Observer func(StepResult)
 }
@@ -206,6 +212,9 @@ func New(opts Options) (*Sim, error) {
 		perAgentRT:             make(map[world.EntityID]*agentRuntime),
 	}
 
+	if err := opts.Drives.Validate(); err != nil {
+		return nil, fmt.Errorf("sim: root drives: %w", err)
+	}
 	root, err := s.registerAgent(registration{
 		name:         name,
 		systemPrompt: prompt,
@@ -217,6 +226,7 @@ func New(opts Options) (*Sim, error) {
 		reflectEvery: opts.ReflectInterval,
 		spawnedBy:    world.NoAgent,
 		spawnDepth:   0,
+		drives:       opts.Drives.Clone(),
 	})
 	if err != nil {
 		return nil, err
@@ -237,6 +247,7 @@ type registration struct {
 	reflectEvery uint64
 	spawnedBy    world.AgentID
 	spawnDepth   int
+	drives       drives.State
 }
 
 // registerAgent creates an entity in the world, builds an Agent
@@ -244,11 +255,15 @@ type registration struct {
 // called from SpawnAgent; the root creator from New does not hold
 // it yet but no concurrent access is possible at construction time.
 func (s *Sim) registerAgent(r registration) (*agent.Agent, error) {
-	id, err := s.World.Create(r.spawnedBy, "agent", world.Properties{
+	props := world.Properties{
 		"name":          r.name,
 		"role":          roleLabel(r.spawnedBy),
 		"system_prompt": r.systemPrompt,
-	})
+	}
+	if dm := r.drives.AsMap(); dm != nil {
+		props["drives"] = dm
+	}
+	id, err := s.World.Create(r.spawnedBy, "agent", props)
 	if err != nil {
 		return nil, fmt.Errorf("sim: spawn agent entity: %w", err)
 	}
@@ -274,6 +289,7 @@ func (s *Sim) registerAgent(r registration) (*agent.Agent, error) {
 	ag.Embedder = r.embedder
 	ag.Importance = r.importance
 	ag.SpawnDepth = r.spawnDepth
+	ag.Drives = r.drives.Clone()
 
 	rt := &agentRuntime{spawnedBy: r.spawnedBy}
 	if r.reflectEvery > 0 {
@@ -464,6 +480,14 @@ func (s *Sim) handleSpawn(ctx context.Context, parent *agent.Agent, raw json.Raw
 		return "", fmt.Errorf("SpawnAgent: build brain: %w", err)
 	}
 
+	childDrives := drives.State(a.Drives).Clone()
+	if childDrives == nil {
+		childDrives = parent.Drives.Clone()
+	}
+	if err := childDrives.Validate(); err != nil {
+		return "", fmt.Errorf("SpawnAgent: drives: %w", err)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	child, err := s.registerAgent(registration{
@@ -476,6 +500,7 @@ func (s *Sim) handleSpawn(ctx context.Context, parent *agent.Agent, raw json.Raw
 		reflectEvery: s.defaultReflectInterval,
 		spawnedBy:    parent.EntityID,
 		spawnDepth:   parentDepth + 1,
+		drives:       childDrives,
 	})
 	if err != nil {
 		return "", err

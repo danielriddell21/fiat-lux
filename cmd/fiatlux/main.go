@@ -619,6 +619,7 @@ func (a *simAdapter) Agents() []tui.AgentInfo {
 			ID:        uint64(ag.EntityID),
 			Name:      ag.Name,
 			IsCreator: ag.SpawnDepth == 0,
+			Drives:    ag.Drives.Clone(),
 		}
 	}
 	return out
@@ -739,6 +740,7 @@ func (a *universeAdapter) Agents() []tui.AgentInfo {
 			ID:        uint64(ag.EntityID),
 			Name:      ag.Name,
 			IsCreator: ag.SpawnDepth == 0,
+			Drives:    ag.Drives.Clone(),
 		}
 	}
 	return out

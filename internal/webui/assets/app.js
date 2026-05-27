@@ -163,7 +163,14 @@
     state.agents.forEach((a) => {
       const li = document.createElement("li");
       li.className = a.is_creator ? "creator" : "";
-      li.innerHTML = `<span class="name">${escapeHTML(a.name)}</span><span class="id">#${a.id}</span>`;
+      let html = `<span class="name">${escapeHTML(a.name)}</span><span class="id">#${a.id}</span>`;
+      if (a.drives && Object.keys(a.drives).length) {
+        const parts = Object.entries(a.drives)
+          .sort(([k1], [k2]) => k1.localeCompare(k2))
+          .map(([k, v]) => `${escapeHTML(k)}:${Number(v).toFixed(2)}`);
+        html += `<span class="drives">${parts.join(" ")}</span>`;
+      }
+      li.innerHTML = html;
       els.agents.appendChild(li);
     });
   }
