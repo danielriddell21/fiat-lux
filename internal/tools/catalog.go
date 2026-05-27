@@ -13,10 +13,10 @@ import (
 
 // Default returns the full tool catalogue: Create, Modify,
 // Destroy, Relate, Unrelate, Observe, Reflect, SpawnAgent, Speak,
-// DefineTool, Wait, FindByType, FindByProperty, FindRelated, Zoom,
-// Unzoom. SpawnAgent, Speak, DefineTool, Zoom, and Unzoom are
-// intercepted by the sim layer (which has access to per-world or
-// per-agent state); their Apply funcs are minimal stubs the sim
+// DefineTool, Die, Wait, FindByType, FindByProperty, FindRelated,
+// Zoom, Unzoom. SpawnAgent, Speak, DefineTool, Die, Zoom, and Unzoom
+// are intercepted by the sim layer (which has access to per-world
+// or per-agent state); their Apply funcs are minimal stubs the sim
 // never invokes.
 func Default() *Registry {
 	return NewRegistry(
@@ -30,6 +30,7 @@ func Default() *Registry {
 		SpawnAgent(),
 		Speak(),
 		DefineTool(),
+		Die(),
 		Wait(),
 		FindByType(),
 		FindByProperty(),
@@ -489,10 +490,10 @@ func Speak() Tool {
 // DefineToolArgs is the public arg struct so the sim adapter can
 // decode the call before forwarding to its macro registry.
 type DefineToolArgs struct {
-	Name        string             `json:"name"`
-	Description string             `json:"description,omitempty"`
-	Params      []string           `json:"params,omitempty"`
-	Steps       []DefineToolStep   `json:"steps"`
+	Name        string           `json:"name"`
+	Description string           `json:"description,omitempty"`
+	Params      []string         `json:"params,omitempty"`
+	Steps       []DefineToolStep `json:"steps"`
 }
 
 // DefineToolStep mirrors macros.Step in the agent-facing JSON shape.
@@ -533,6 +534,36 @@ func DefineTool() Tool {
 		},
 		Apply: func(_ *world.World, _ world.AgentID, _ json.RawMessage) (string, error) {
 			return "", errors.New("DefineTool: must be intercepted by sim layer")
+		},
+		RandomArgs: nil,
+	}
+}
+
+// ---- Die --------------------------------------------------------------------
+
+// DieArgs is the public arg struct so the sim adapter can decode
+// the call. Die takes no required arguments; an optional final
+// thought is recorded with the death event.
+type DieArgs struct {
+	Final string `json:"final,omitempty"`
+}
+
+// Die signals the agent's intent to terminate. The sim layer
+// intercepts this tool: it computes a memory digest, hands the
+// digest to every direct child, soft-destroys the agent's entity,
+// and removes the agent from the runtime roster.
+func Die() Tool {
+	return Tool{
+		Name:        "Die",
+		Description: "End your existence. Direct children inherit a digest of your memories. Use sparingly; the world does not bring you back.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"final": map[string]any{"type": "string", "description": "optional last words recorded with the death event"},
+			},
+		},
+		Apply: func(_ *world.World, _ world.AgentID, _ json.RawMessage) (string, error) {
+			return "", errors.New("Die: must be intercepted by sim layer")
 		},
 		RandomArgs: nil,
 	}

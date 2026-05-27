@@ -30,6 +30,8 @@ type AgentSummary struct {
 	IsCreator  bool               `json:"is_creator"`
 	SpawnDepth int                `json:"spawn_depth"`
 	Drives     map[string]float64 `json:"drives,omitempty"`
+	ParentID   uint64             `json:"parent_id,omitempty"`
+	Dead       bool               `json:"dead,omitempty"`
 }
 
 // StepEvent is the payload pushed over SSE on every Sim.Step.
@@ -75,6 +77,8 @@ func buildState(sm *sim.Sim) StateResponse {
 			IsCreator:  ag.SpawnDepth == 0,
 			SpawnDepth: ag.SpawnDepth,
 			Drives:     ag.Drives.Clone(),
+			ParentID:   uint64(ag.ParentEntityID),
+			Dead:       sm.IsDead(ag.EntityID),
 		}
 	}
 	return StateResponse{

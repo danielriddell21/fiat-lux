@@ -347,19 +347,24 @@ func (w *World) Unrelate(by AgentID, id RelationshipID) error {
 
 // EmitInfo appends a non-mutating event kind to the log. It is the
 // hook the sim layer uses to persist state that lives above the
-// world layer (e.g. runtime-defined macros) while keeping the event
-// log the single source of truth. Returns the assigned event ID.
+// world layer (e.g. runtime-defined macros, agent death) while
+// keeping the event log the single source of truth. Returns the
+// assigned event ID.
 //
 // The world treats info events as opaque: ApplyEventForLoad records
-// them but does not interpret Props. Callers must restrict kind to
-// known info-only kinds (currently EventDefineTool).
+// them but does not interpret Props (with the exception of EventDie,
+// which soft-destroys the agent's entity to mirror live behaviour).
+// EntityID is set to the calling agent so EventDie's replay path
+// can find the entity to soft-destroy without re-encoding it in
+// Props.
 func (w *World) EmitInfo(by AgentID, kind EventKind, props Properties) EventID {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.appendEvent(Event{
-		Kind:  kind,
-		Agent: by,
-		Props: props.Clone(),
+		Kind:     kind,
+		Agent:    by,
+		EntityID: by,
+		Props:    props.Clone(),
 	})
 	return w.nextEvent - 1
 }
@@ -477,6 +482,13 @@ func (w *World) ApplyEventForLoad(e Event) error {
 		// Sim-layer state; the world records the event so the log
 		// stays the single source of truth, but does not interpret
 		// the macro definition itself.
+	case EventDie:
+		ent, ok := w.entities[e.EntityID]
+		if !ok {
+			return fmt.Errorf("world: die event %d targets unknown entity %d", e.ID, e.EntityID)
+		}
+		t := e.Tick
+		ent.DestroyedAt = &t
 	default:
 		return fmt.Errorf("world: unknown event kind %q", e.Kind)
 	}

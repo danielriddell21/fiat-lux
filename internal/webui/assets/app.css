@@ -145,12 +145,18 @@ main {
 }
 
 .agents li.creator { color: var(--accent); }
+.agents li.dead { opacity: 0.5; text-decoration: line-through; }
 .agents li .id { color: var(--fg-faint); }
 .agents li .drives {
   color: var(--fg-faint);
   font-size: 0.85em;
   margin-left: 8px;
   flex-basis: 100%;
+}
+.agents li .dead-badge {
+  color: var(--fg-faint);
+  margin-left: 6px;
+  font-size: 0.85em;
 }
 
 .card.intervene form {

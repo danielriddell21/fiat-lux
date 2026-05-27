@@ -622,6 +622,8 @@ func (a *simAdapter) Agents() []tui.AgentInfo {
 			Name:      ag.Name,
 			IsCreator: ag.SpawnDepth == 0,
 			Drives:    ag.Drives.Clone(),
+			ParentID:  uint64(ag.ParentEntityID),
+			Dead:      a.s.IsDead(ag.EntityID),
 		}
 	}
 	return out
@@ -766,7 +768,8 @@ func (a *universeAdapter) CycleFocusedWorld(delta int) { a.u.CycleFocus(delta) }
 // Agents / FocusedAgentID / SetFocusedAgentID satisfy
 // tui.AgentLister, scoped to the focused world.
 func (a *universeAdapter) Agents() []tui.AgentInfo {
-	roster := a.u.Focused().Agents()
+	focused := a.u.Focused()
+	roster := focused.Agents()
 	out := make([]tui.AgentInfo, len(roster))
 	for i, ag := range roster {
 		out[i] = tui.AgentInfo{
@@ -774,6 +777,8 @@ func (a *universeAdapter) Agents() []tui.AgentInfo {
 			Name:      ag.Name,
 			IsCreator: ag.SpawnDepth == 0,
 			Drives:    ag.Drives.Clone(),
+			ParentID:  uint64(ag.ParentEntityID),
+			Dead:      focused.IsDead(ag.EntityID),
 		}
 	}
 	return out
