@@ -13,10 +13,11 @@ import (
 
 // Default returns the full tool catalogue: Create, Modify,
 // Destroy, Relate, Unrelate, Observe, Reflect, SpawnAgent, Speak,
-// Wait, FindByType, FindByProperty, FindRelated, Zoom, Unzoom.
-// SpawnAgent, Speak, Zoom, and Unzoom are intercepted by the sim
-// layer (which has access to per-world or per-agent state); their
-// Apply funcs are minimal stubs the sim never invokes.
+// DefineTool, Wait, FindByType, FindByProperty, FindRelated, Zoom,
+// Unzoom. SpawnAgent, Speak, DefineTool, Zoom, and Unzoom are
+// intercepted by the sim layer (which has access to per-world or
+// per-agent state); their Apply funcs are minimal stubs the sim
+// never invokes.
 func Default() *Registry {
 	return NewRegistry(
 		Create(),
@@ -28,6 +29,7 @@ func Default() *Registry {
 		Reflect(),
 		SpawnAgent(),
 		Speak(),
+		DefineTool(),
 		Wait(),
 		FindByType(),
 		FindByProperty(),
@@ -383,6 +385,10 @@ type SpawnAgentArgs struct {
 	BrainConfig  map[string]any     `json:"brain_config,omitempty"`
 	GrantedTools []string           `json:"granted_tools,omitempty"`
 	Drives       map[string]float64 `json:"drives,omitempty"`
+	// InheritMacros, when nil, defaults to true: the child inherits
+	// every macro the parent has defined. Set to false to start the
+	// child with an empty macro set.
+	InheritMacros *bool `json:"inherit_macros,omitempty"`
 }
 
 // alias for backwards compatibility within this file.
@@ -404,6 +410,10 @@ func SpawnAgent() Tool {
 					"type":                 "object",
 					"description":          "intrinsic motivational state - named float weights; if omitted, the child inherits the parent's drives",
 					"additionalProperties": map[string]any{"type": "number"},
+				},
+				"inherit_macros": map[string]any{
+					"type":        "boolean",
+					"description": "when true (the default), the child inherits every macro the parent has defined",
 				},
 			},
 			"required": []string{"name", "system_prompt"},
@@ -470,6 +480,60 @@ func Speak() Tool {
 			return "(spoke without sim broadcast) " + a.Content, nil
 		},
 		// No RandomArgs: the stub brain shouldn't spam Speak.
+		RandomArgs: nil,
+	}
+}
+
+// ---- DefineTool -------------------------------------------------------------
+
+// DefineToolArgs is the public arg struct so the sim adapter can
+// decode the call before forwarding to its macro registry.
+type DefineToolArgs struct {
+	Name        string             `json:"name"`
+	Description string             `json:"description,omitempty"`
+	Params      []string           `json:"params,omitempty"`
+	Steps       []DefineToolStep   `json:"steps"`
+}
+
+// DefineToolStep mirrors macros.Step in the agent-facing JSON shape.
+type DefineToolStep struct {
+	Tool string         `json:"tool"`
+	Args map[string]any `json:"args,omitempty"`
+}
+
+// DefineTool lets the agent author a named macro - a parameterised
+// sequence of existing primitive tool calls. The macro persists in
+// the world event log so it is rehydrated on restart and replayed
+// exactly. The sim layer intercepts this tool; its Apply func is a
+// no-op safety stub.
+func DefineTool() Tool {
+	return Tool{
+		Name: "DefineTool",
+		Description: "Author a named macro - a sequence of existing tool calls with " +
+			"{{param}} substitution. The macro appears as a new tool in subsequent ticks.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":        map[string]any{"type": "string"},
+				"description": map[string]any{"type": "string"},
+				"params":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"steps": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"tool": map[string]any{"type": "string"},
+							"args": map[string]any{"type": "object"},
+						},
+						"required": []string{"tool"},
+					},
+				},
+			},
+			"required": []string{"name", "steps"},
+		},
+		Apply: func(_ *world.World, _ world.AgentID, _ json.RawMessage) (string, error) {
+			return "", errors.New("DefineTool: must be intercepted by sim layer")
+		},
 		RandomArgs: nil,
 	}
 }

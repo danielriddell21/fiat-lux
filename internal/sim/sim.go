@@ -11,6 +11,7 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/agent"
 	"github.com/danielriddell21/fiat-lux/internal/brain"
 	"github.com/danielriddell21/fiat-lux/internal/drives"
+	"github.com/danielriddell21/fiat-lux/internal/macros"
 	"github.com/danielriddell21/fiat-lux/internal/memory"
 	"github.com/danielriddell21/fiat-lux/internal/tools"
 	"github.com/danielriddell21/fiat-lux/internal/world"
@@ -82,6 +83,9 @@ type agentRuntime struct {
 	// spawnedBy holds the EntityID of the parent agent, used by
 	// SpawnAgent depth checks. Zero for the root creator.
 	spawnedBy world.EntityID
+	// macros is the agent's runtime-defined macro set. Always
+	// non-nil after registerAgent.
+	macros *macros.Set
 }
 
 // StepResult is a structured summary of one Step.
@@ -248,6 +252,7 @@ type registration struct {
 	spawnedBy    world.AgentID
 	spawnDepth   int
 	drives       drives.State
+	macros       *macros.Set
 }
 
 // registerAgent creates an entity in the world, builds an Agent
@@ -291,7 +296,11 @@ func (s *Sim) registerAgent(r registration) (*agent.Agent, error) {
 	ag.SpawnDepth = r.spawnDepth
 	ag.Drives = r.drives.Clone()
 
-	rt := &agentRuntime{spawnedBy: r.spawnedBy}
+	macroSet := r.macros
+	if macroSet == nil {
+		macroSet = macros.NewSet()
+	}
+	rt := &agentRuntime{spawnedBy: r.spawnedBy, macros: macroSet}
 	if r.reflectEvery > 0 {
 		rt.reflector = &memory.Reflector{Brain: r.brain, Interval: r.reflectEvery}
 	}
@@ -328,6 +337,46 @@ func (s *Sim) AgentByID(id world.EntityID) *agent.Agent {
 		}
 	}
 	return nil
+}
+
+// RestoreMacros reattaches a previously-defined macro set to the
+// root agent. Used by the load path to rehydrate runtime-defined
+// tools across sessions. Each macro is validated against the root's
+// tool registry; invalid entries are skipped silently so a stale
+// store cannot break startup.
+func (s *Sim) RestoreMacros(set *macros.Set) {
+	if set == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.agents) == 0 {
+		return
+	}
+	root := s.agents[0]
+	rt := s.perAgentRT[root.EntityID]
+	if rt == nil {
+		return
+	}
+	known := primitiveToolNameSet(root.Tools)
+	for _, m := range set.All() {
+		_ = rt.macros.Add(m, known)
+	}
+}
+
+// RootMacros returns the root agent's current macro set. Useful for
+// inspection and tests; the returned set is a clone safe to mutate.
+func (s *Sim) RootMacros() *macros.Set {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.agents) == 0 {
+		return nil
+	}
+	rt := s.perAgentRT[s.agents[0].EntityID]
+	if rt == nil {
+		return nil
+	}
+	return rt.macros.Clone()
 }
 
 // Step picks the next agent in round-robin order and runs one
@@ -384,6 +433,7 @@ func (s *Sim) stepAgent(ctx context.Context, ag *agent.Agent, rt *agentRuntime) 
 
 	p := ag.BuildPerception(s.World, mems, heard)
 	defs := ag.Tools.Defs()
+	defs = append(defs, rt.macros.Defs()...)
 	decision, err := ag.Brain.Decide(ctx, p, defs)
 	if err != nil {
 		return StepResult{Tick: tick, AgentID: ag.EntityID, AgentName: ag.Name},
@@ -432,8 +482,10 @@ func (s *Sim) stepAgent(ctx context.Context, ag *agent.Agent, rt *agentRuntime) 
 }
 
 // invokeTool dispatches the agent's chosen tool. SpawnAgent, Speak,
-// Zoom, and Unzoom are intercepted here because they need access to
-// per-world or per-agent state the registry cannot reach.
+// DefineTool, Zoom, and Unzoom are intercepted here because they
+// need access to per-world or per-agent state the registry cannot
+// reach. Macro calls are expanded against the agent's macro set and
+// recursively dispatched.
 func (s *Sim) invokeTool(ctx context.Context, ag *agent.Agent, call brain.ToolCall, tick world.Tick) (string, error) {
 	switch call.Name {
 	case "SpawnAgent":
@@ -444,8 +496,104 @@ func (s *Sim) invokeTool(ctx context.Context, ag *agent.Agent, call brain.ToolCa
 		return s.handleZoom(ag, call.Args)
 	case "Unzoom":
 		return s.handleUnzoom(ag)
+	case "DefineTool":
+		return s.handleDefineTool(ag, call.Args)
+	}
+	if rt := s.runtimeFor(ag.EntityID); rt != nil && rt.macros != nil {
+		if m, ok := rt.macros.Get(call.Name); ok {
+			expanded, err := m.Expand(call, rt.macros.AsRegistry(), 0)
+			if err != nil {
+				return "", err
+			}
+			return s.invokeExpanded(ctx, ag, m.Name, expanded, tick)
+		}
 	}
 	return ag.Tools.Invoke(call, s.World, ag.EntityID)
+}
+
+// invokeExpanded runs an ordered list of primitive (or further
+// macro) tool calls, stopping on the first error. Returns a combined
+// human-readable result for the agent's memory stream.
+func (s *Sim) invokeExpanded(ctx context.Context, ag *agent.Agent, macroName string, calls []brain.ToolCall, tick world.Tick) (string, error) {
+	results := make([]string, 0, len(calls))
+	for i, c := range calls {
+		out, err := s.invokeTool(ctx, ag, c, tick)
+		if err != nil {
+			return "", fmt.Errorf("%s step %d (%s): %w", macroName, i, c.Name, err)
+		}
+		results = append(results, out)
+	}
+	summary := fmt.Sprintf("%s expanded %d step(s)", macroName, len(calls))
+	if len(results) > 0 {
+		summary += ": " + results[len(results)-1]
+	}
+	return summary, nil
+}
+
+// runtimeFor returns the per-agent runtime block for the given
+// entity. Caller must NOT hold s.mu. Returns nil if the agent has
+// no registered runtime.
+func (s *Sim) runtimeFor(id world.EntityID) *agentRuntime {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.perAgentRT[id]
+}
+
+func (s *Sim) handleDefineTool(ag *agent.Agent, raw json.RawMessage) (string, error) {
+	var a tools.DefineToolArgs
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return "", fmt.Errorf("DefineTool: bad args: %w", err)
+	}
+	steps := make([]macros.Step, len(a.Steps))
+	for i, st := range a.Steps {
+		stepArgs, err := json.Marshal(st.Args)
+		if err != nil {
+			return "", fmt.Errorf("DefineTool: step %d args: %w", i, err)
+		}
+		if len(st.Args) == 0 {
+			stepArgs = json.RawMessage(`{}`)
+		}
+		steps[i] = macros.Step{Tool: st.Tool, Args: stepArgs}
+	}
+	m := macros.Macro{
+		Name:        a.Name,
+		Description: a.Description,
+		Params:      a.Params,
+		Steps:       steps,
+	}
+	rt := s.runtimeFor(ag.EntityID)
+	if rt == nil {
+		return "", errors.New("DefineTool: no runtime for agent")
+	}
+	known := primitiveToolNameSet(ag.Tools)
+	if err := rt.macros.Add(m, known); err != nil {
+		return "", err
+	}
+	persisted, err := json.Marshal(m)
+	if err != nil {
+		return "", fmt.Errorf("DefineTool: persist: %w", err)
+	}
+	s.World.EmitInfo(ag.EntityID, world.EventDefineTool, world.Properties{
+		"macro": json.RawMessage(persisted),
+	})
+	return fmt.Sprintf("defined tool %q (%d step(s))", m.Name, len(m.Steps)), nil
+}
+
+// primitiveToolNameSet returns the names of every tool the agent
+// can directly invoke - excluding the DefineTool sentinel itself so
+// macros cannot include DefineTool steps.
+func primitiveToolNameSet(reg *tools.Registry) map[string]struct{} {
+	if reg == nil {
+		return nil
+	}
+	out := make(map[string]struct{})
+	for _, t := range reg.All() {
+		if t.Name == "DefineTool" {
+			continue
+		}
+		out[t.Name] = struct{}{}
+	}
+	return out
 }
 
 func (s *Sim) handleSpawn(ctx context.Context, parent *agent.Agent, raw json.RawMessage) (string, error) {
@@ -490,6 +638,12 @@ func (s *Sim) handleSpawn(ctx context.Context, parent *agent.Agent, raw json.Raw
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var inheritedMacros *macros.Set
+	if a.InheritMacros == nil || *a.InheritMacros {
+		if parentRT := s.perAgentRT[parent.EntityID]; parentRT != nil {
+			inheritedMacros = parentRT.macros.Clone()
+		}
+	}
 	child, err := s.registerAgent(registration{
 		name:         a.Name,
 		systemPrompt: a.SystemPrompt,
@@ -501,6 +655,7 @@ func (s *Sim) handleSpawn(ctx context.Context, parent *agent.Agent, raw json.Raw
 		spawnedBy:    parent.EntityID,
 		spawnDepth:   parentDepth + 1,
 		drives:       childDrives,
+		macros:       inheritedMacros,
 	})
 	if err != nil {
 		return "", err
