@@ -70,6 +70,7 @@ func New(opts Options) (*Server, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/state", s.handleState)
 	mux.HandleFunc("/api/events", s.handleEvents)
+	mux.HandleFunc("/api/intervene", s.handleIntervene)
 	mux.Handle("/assets/", http.StripPrefix("/assets/", s.assetsHandler()))
 	mux.HandleFunc("/", s.handleIndex)
 	s.srv = &http.Server{

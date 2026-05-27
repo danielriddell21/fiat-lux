@@ -30,7 +30,12 @@ func RenderEventLog(events []world.Event, n int, s Styles) string {
 
 func renderEvent(e world.Event, s Styles) string {
 	tick := s.EventTick.Render(fmt.Sprintf("t%-5d", e.Tick))
-	agent := s.EventAgent.Render(fmt.Sprintf("a%-3d", e.Agent))
+	var agent string
+	if e.Agent == world.AgentIntervener {
+		agent = s.EventAgent.Render("[void]")
+	} else {
+		agent = s.EventAgent.Render(fmt.Sprintf("a%-4d", e.Agent))
+	}
 	kind := s.EventKind.Render(padRight(string(e.Kind), 9))
 	target := s.EventTarget.Render(eventTarget(e))
 	out := fmt.Sprintf("%s %s %s %s", tick, agent, kind, target)

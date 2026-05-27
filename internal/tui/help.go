@@ -20,6 +20,7 @@ func helpEntries() []helpEntry {
 		{"+ / -", "speed up/down"},
 		{"s", "save world to store"},
 		{"m", "memory inspector"},
+		{"i + c/d/s", "intervene as the void: create / destroy / speak"},
 		{"n", "(debug) create a random entity"},
 		{"x", "(debug) destroy the most recent entity"},
 		{"r", "(debug) relate the two most recent entities"},

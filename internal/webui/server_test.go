@@ -295,6 +295,52 @@ func TestBroker_DropsSlowSubscriber(t *testing.T) {
 	}
 }
 
+func TestIntervene_AppliesAndStampsSentinel(t *testing.T) {
+	t.Parallel()
+	s := newTestSim(t)
+	srv := newTestServer(t, s)
+	hs := httptest.NewServer(srv.srv.Handler)
+	defer hs.Close()
+
+	body := strings.NewReader(`{"op":"create","type_label":"miracle"}`)
+	resp, err := http.Post(hs.URL+"/api/intervene", "application/json", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var found bool
+	for _, ev := range s.World.Events() {
+		if ev.Kind == world.EventCreate && ev.TypeLabel == "miracle" {
+			found = true
+			if ev.Agent != world.AgentIntervener {
+				t.Errorf("agent = %d, want AgentIntervener", ev.Agent)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no miracle event in log")
+	}
+}
+
+func TestIntervene_RejectsGet(t *testing.T) {
+	t.Parallel()
+	s := newTestSim(t)
+	srv := newTestServer(t, s)
+	hs := httptest.NewServer(srv.srv.Handler)
+	defer hs.Close()
+	resp, err := http.Get(hs.URL + "/api/intervene")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", resp.StatusCode)
+	}
+}
+
 func TestIsLocalOnly(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

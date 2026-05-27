@@ -21,6 +21,8 @@
     empty: document.getElementById("empty"),
     eventLog: document.getElementById("event-log"),
     conn: document.getElementById("conn"),
+    interveneForm: document.getElementById("intervene-form"),
+    interveneStatus: document.getElementById("intervene-status"),
   };
 
   let cy = null;
@@ -284,5 +286,49 @@
   }
 
   // Initial snapshot, then live updates.
+  function wireIntervene() {
+    if (!els.interveneForm) return;
+    els.interveneForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const form = new FormData(els.interveneForm);
+      const op = form.get("op");
+      const value = (form.get("value") || "").toString().trim();
+      const entityID = parseInt(form.get("entity_id") || "0", 10);
+      const body = { op };
+      if (op === "create") {
+        body.type_label = value || "miracle";
+      } else if (op === "destroy") {
+        if (!entityID) {
+          els.interveneStatus.textContent = "destroy needs entity_id";
+          return;
+        }
+        body.entity_id = entityID;
+      } else if (op === "speak") {
+        if (!value) {
+          els.interveneStatus.textContent = "speak needs content";
+          return;
+        }
+        body.content = value;
+      }
+      try {
+        const res = await fetch("/api/intervene", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          els.interveneStatus.textContent = "error: " + text.trim();
+          return;
+        }
+        els.interveneStatus.textContent = `${op} applied`;
+        els.interveneForm.reset();
+      } catch (err) {
+        els.interveneStatus.textContent = "error: " + err.message;
+      }
+    });
+  }
+
+  wireIntervene();
   fetchState().then(connectEvents);
 })();

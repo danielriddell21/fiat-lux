@@ -639,6 +639,37 @@ func (a *simAdapter) SetFocusedAgentID(id uint64) {
 	a.focusMu.Unlock()
 }
 
+// InterveneCreate, InterveneDestroy, InterveneSpeak satisfy
+// tui.Interveneable. They forward to sim.Intervene under the
+// AgentIntervener sentinel.
+func (a *simAdapter) InterveneCreate(typeLabel string) (string, error) {
+	op := sim.Intervention{
+		Op:         sim.InterveneCreate,
+		TypeLabel:  typeLabel,
+		Properties: map[string]any{"origin": "void"},
+	}
+	if err := a.s.Intervene(context.Background(), op); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("the void willed a %s into being", typeLabel), nil
+}
+
+func (a *simAdapter) InterveneDestroy(entityID uint64) (string, error) {
+	op := sim.Intervention{Op: sim.InterveneDestroy, EntityID: entityID}
+	if err := a.s.Intervene(context.Background(), op); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("the void unmade #%d", entityID), nil
+}
+
+func (a *simAdapter) InterveneSpeak(content string) (string, error) {
+	op := sim.Intervention{Op: sim.InterveneSpeak, Content: content}
+	if err := a.s.Intervene(context.Background(), op); err != nil {
+		return "", err
+	}
+	return "the void whispered to every agent", nil
+}
+
 // MemorySnapshot satisfies tui.MemoryAccessor: returns the focused
 // agent's memory stream.
 func (a *simAdapter) MemorySnapshot() tui.MemorySnapshot {
@@ -758,6 +789,36 @@ func (a *universeAdapter) SetFocusedAgentID(id uint64) {
 	a.focusMu.Lock()
 	a.focusByWorld[a.u.FocusedIdx()] = id
 	a.focusMu.Unlock()
+}
+
+// InterveneCreate, InterveneDestroy, InterveneSpeak satisfy
+// tui.Interveneable, scoped to the currently-focused world.
+func (a *universeAdapter) InterveneCreate(typeLabel string) (string, error) {
+	op := sim.Intervention{
+		Op:         sim.InterveneCreate,
+		TypeLabel:  typeLabel,
+		Properties: map[string]any{"origin": "void"},
+	}
+	if err := a.u.Focused().Intervene(context.Background(), op); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("the void willed a %s into being", typeLabel), nil
+}
+
+func (a *universeAdapter) InterveneDestroy(entityID uint64) (string, error) {
+	op := sim.Intervention{Op: sim.InterveneDestroy, EntityID: entityID}
+	if err := a.u.Focused().Intervene(context.Background(), op); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("the void unmade #%d", entityID), nil
+}
+
+func (a *universeAdapter) InterveneSpeak(content string) (string, error) {
+	op := sim.Intervention{Op: sim.InterveneSpeak, Content: content}
+	if err := a.u.Focused().Intervene(context.Background(), op); err != nil {
+		return "", err
+	}
+	return "the void whispered to every agent", nil
 }
 
 // MemorySnapshot satisfies tui.MemoryAccessor: returns the

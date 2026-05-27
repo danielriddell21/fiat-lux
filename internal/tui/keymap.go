@@ -17,6 +17,7 @@ type KeyMap struct {
 	SpeedUp      []string
 	SpeedDown    []string
 	MemoryToggle []string
+	Intervene    []string
 	DebugCreate  []string
 	DebugDestroy []string
 	DebugRelate  []string
@@ -37,6 +38,7 @@ func DefaultKeyMap() KeyMap {
 		SpeedUp:      []string{"+", "="},
 		SpeedDown:    []string{"-", "_"},
 		MemoryToggle: []string{"m"},
+		Intervene:    []string{"i"},
 		DebugCreate:  []string{"n"},
 		DebugDestroy: []string{"x"},
 		DebugRelate:  []string{"r"},

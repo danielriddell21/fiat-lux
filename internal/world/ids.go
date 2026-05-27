@@ -1,6 +1,9 @@
 package world
 
-import "strconv"
+import (
+	"math"
+	"strconv"
+)
 
 // EntityID is the stable identifier of an entity within a single World.
 // IDs are assigned monotonically starting at 1; the zero value is
@@ -39,3 +42,11 @@ type AgentID = EntityID
 // agent - currently only seeded test data and the special "advance
 // tick" record.
 const NoAgent AgentID = 0
+
+// AgentIntervener is the reserved AgentID stamped on every event
+// produced by an external sandbox intervention (user-injected
+// "miracle" from the TUI or web). It is well above the range any
+// real entity will reach, so existing code paths can attribute and
+// display events without schema work. The signed-int64 SQLite
+// column comfortably accommodates the value.
+const AgentIntervener AgentID = math.MaxInt64
