@@ -208,3 +208,19 @@ func (s *Server) handleIntervene(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
+
+// handleAnnals returns the narrator's chapter log for the currently
+// focused world. The response is JSON: { "chapters": [...] }.
+func (s *Server) handleAnnals(w http.ResponseWriter, r *http.Request) {
+	sm := s.provider()
+	if sm == nil {
+		http.Error(w, "no sim attached", http.StatusServiceUnavailable)
+		return
+	}
+	chapters := sm.Annals()
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"chapters": chapters,
+	})
+}

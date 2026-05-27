@@ -35,6 +35,7 @@ import (
 	imageopenai "github.com/danielriddell21/fiat-lux/internal/imagegen/openai"
 	imageopenaicompat "github.com/danielriddell21/fiat-lux/internal/imagegen/openaicompat"
 	"github.com/danielriddell21/fiat-lux/internal/memory"
+	"github.com/danielriddell21/fiat-lux/internal/narrator"
 	"github.com/danielriddell21/fiat-lux/internal/sim"
 	"github.com/danielriddell21/fiat-lux/internal/store"
 	"github.com/danielriddell21/fiat-lux/internal/tools"
@@ -187,6 +188,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	saveMode := fs.String("save-mode", "", "persistence cadence: manual | interval:<duration> (e.g. interval:30s)")
 	multimodalSpec := fs.String("multimodal", "", "image generator: '' (use YAML or disabled) | none | openai[:model] | openaicompat:<base_url>::<model>")
 	imageCacheDir := fs.String("image-cache", "", "directory for generated images (default: $XDG_CACHE_HOME/fiatlux/images)")
+	narratorSpec := fs.String("narrator", "", "global narrator brain spec (overrides YAML); '' = use YAML, 'none' = disable")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -304,6 +306,14 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		for _, s := range attachOnSims {
 			s.SetMultimodal(mmOpts)
 		}
+	}
+
+	// Apply the --narrator CLI override after sims are built. Blank
+	// means "use whatever YAML configured"; "none" disables on every
+	// world; any other spec installs a narrator on every world with
+	// that brain.
+	if err := applyNarratorOverride(ctx, *narratorSpec, attachOnSims); err != nil {
+		return fmt.Errorf("narrator: %w", err)
 	}
 
 	// Resolve the web address: CLI flag wins, then YAML config.
@@ -471,6 +481,37 @@ func chainObservers(a, b func(sim.StepResult)) func(sim.StepResult) {
 		a(r)
 		b(r)
 	}
+}
+
+// applyNarratorOverride honours the --narrator CLI flag:
+//   - ""     keep whatever YAML configured (no-op)
+//   - "none" clear the narrator on every sim
+//   - any other string is treated as a brain spec; a fresh narrator
+//     is built for each sim with the package defaults for cadence
+//     (use YAML when finer control is needed).
+func applyNarratorOverride(ctx context.Context, spec string, sims []*sim.Sim) error {
+	switch spec {
+	case "":
+		return nil
+	case "none":
+		for _, s := range sims {
+			s.SetNarrator(nil)
+		}
+		return nil
+	}
+	for _, s := range sims {
+		br, err := buildBrain(spec)
+		if err != nil {
+			return fmt.Errorf("brain %q: %w", spec, err)
+		}
+		n, err := narrator.New(narrator.Options{Brain: br})
+		if err != nil {
+			_ = br.Close()
+			return err
+		}
+		s.SetNarrator(n)
+	}
+	return nil
 }
 
 // buildSim wires up a Sim from the brain spec string. Supported specs:
@@ -708,6 +749,20 @@ func (a *simAdapter) Step(ctx context.Context) (tui.StepSummary, error) {
 	}, nil
 }
 
+// Annals satisfies tui.AnnalsAccessor: forwards the sim's chapter
+// log into the TUI's projection.
+func (a *simAdapter) Annals() []tui.ChapterSummary {
+	chapters := a.s.Annals()
+	if len(chapters) == 0 {
+		return nil
+	}
+	out := make([]tui.ChapterSummary, len(chapters))
+	for i, c := range chapters {
+		out[i] = tui.ChapterSummary{Tick: c.Tick, Content: c.Content}
+	}
+	return out
+}
+
 // Agents satisfies tui.AgentLister.
 func (a *simAdapter) Agents() []tui.AgentInfo {
 	roster := a.s.Agents()
@@ -860,6 +915,19 @@ func (a *universeAdapter) Worlds() []tui.WorldInfo {
 func (a *universeAdapter) FocusedWorldIdx() int        { return a.u.FocusedIdx() }
 func (a *universeAdapter) SetFocusedWorldIdx(i int)    { a.u.SetFocusedIdx(i) }
 func (a *universeAdapter) CycleFocusedWorld(delta int) { a.u.CycleFocus(delta) }
+
+// Annals satisfies tui.AnnalsAccessor, scoped to the focused world.
+func (a *universeAdapter) Annals() []tui.ChapterSummary {
+	chapters := a.u.Focused().Annals()
+	if len(chapters) == 0 {
+		return nil
+	}
+	out := make([]tui.ChapterSummary, len(chapters))
+	for i, c := range chapters {
+		out[i] = tui.ChapterSummary{Tick: c.Tick, Content: c.Content}
+	}
+	return out
+}
 
 // Agents / FocusedAgentID / SetFocusedAgentID satisfy
 // tui.AgentLister, scoped to the focused world.

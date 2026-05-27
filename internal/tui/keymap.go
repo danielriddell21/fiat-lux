@@ -18,6 +18,7 @@ type KeyMap struct {
 	SpeedDown     []string
 	MemoryToggle  []string
 	LineageToggle []string
+	AnnalsToggle  []string
 	Intervene     []string
 	DebugCreate   []string
 	DebugDestroy  []string
@@ -40,6 +41,7 @@ func DefaultKeyMap() KeyMap {
 		SpeedDown:     []string{"-", "_"},
 		MemoryToggle:  []string{"m"},
 		LineageToggle: []string{"l"},
+		AnnalsToggle:  []string{"a"},
 		Intervene:     []string{"i"},
 		DebugCreate:   []string{"n"},
 		DebugDestroy:  []string{"x"},

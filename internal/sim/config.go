@@ -10,6 +10,7 @@ import (
 
 	"github.com/danielriddell21/fiat-lux/internal/drives"
 	"github.com/danielriddell21/fiat-lux/internal/memory"
+	"github.com/danielriddell21/fiat-lux/internal/narrator"
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
@@ -103,8 +104,19 @@ func (m MultimodalConfig) Spec() string {
 
 // WorldConfig is one world's spec.
 type WorldConfig struct {
-	Name  string      `yaml:"name"`
-	Agent AgentConfig `yaml:"agent"`
+	Name     string         `yaml:"name"`
+	Agent    AgentConfig    `yaml:"agent"`
+	Narrator NarratorConfig `yaml:"narrator,omitempty"`
+}
+
+// NarratorConfig configures the per-world chronicler. Empty Brain
+// disables the narrator.
+type NarratorConfig struct {
+	Brain            BrainConfig `yaml:"brain"`
+	IntervalTicks    uint64      `yaml:"interval_ticks,omitempty"`
+	MinEvents        int         `yaml:"min_events,omitempty"`
+	MaxChapterLength int         `yaml:"max_chapter_length,omitempty"`
+	SystemPrompt     string      `yaml:"system_prompt,omitempty"`
 }
 
 // AgentConfig is the root agent's spec for a world.
@@ -226,6 +238,12 @@ func (c *Config) BuildUniverse(
 			closeAll(sims)
 			return nil, fmt.Errorf("sim: world %q brain %q: %w", wc.Name, spec, err)
 		}
+		narr, err := buildNarrator(ctx, factory, wc.Narrator)
+		if err != nil {
+			_ = br.Close()
+			closeAll(sims)
+			return nil, fmt.Errorf("sim: world %q narrator: %w", wc.Name, err)
+		}
 		s, err := New(Options{
 			World:           w,
 			Brain:           br,
@@ -237,15 +255,43 @@ func (c *Config) BuildUniverse(
 			AgentName:       wc.Agent.Name,
 			SystemPrompt:    wc.Agent.SystemPrompt,
 			Drives:          drives.State(wc.Agent.Drives),
+			Narrator:        narr,
 		})
 		if err != nil {
 			_ = br.Close()
+			if narr != nil {
+				_ = narr.Close()
+			}
 			closeAll(sims)
 			return nil, fmt.Errorf("sim: world %q: %w", wc.Name, err)
 		}
 		sims = append(sims, s)
 	}
 	return NewUniverse(sims)
+}
+
+// buildNarrator constructs a narrator from its YAML config slice.
+// Returns nil with no error when the config has no brain spec
+// (narrator disabled for that world).
+func buildNarrator(ctx context.Context, factory BrainFactory, cfg NarratorConfig) (*narrator.Narrator, error) {
+	spec := cfg.Brain.resolveSpec()
+	if spec == "" || spec == "stub" && cfg.Brain.Provider == "" {
+		// Empty config means disabled.
+		if cfg.Brain.Provider == "" && cfg.Brain.Model == "" && cfg.Brain.Spec == "" {
+			return nil, nil
+		}
+	}
+	br, err := factory(ctx, spec)
+	if err != nil {
+		return nil, fmt.Errorf("narrator brain %q: %w", spec, err)
+	}
+	return narrator.New(narrator.Options{
+		Brain:            br,
+		SystemPrompt:     cfg.SystemPrompt,
+		IntervalTicks:    cfg.IntervalTicks,
+		MinEvents:        cfg.MinEvents,
+		MaxChapterLength: cfg.MaxChapterLength,
+	})
 }
 
 // loadOrNew consults the loader for a saved world; falls back to a

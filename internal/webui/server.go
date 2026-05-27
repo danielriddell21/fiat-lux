@@ -79,6 +79,7 @@ func New(opts Options) (*Server, error) {
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.HandleFunc("/api/intervene", s.handleIntervene)
 	mux.HandleFunc("/api/image/", s.handleImage)
+	mux.HandleFunc("/api/annals", s.handleAnnals)
 	mux.Handle("/assets/", http.StripPrefix("/assets/", s.assetsHandler()))
 	mux.HandleFunc("/", s.handleIndex)
 	s.srv = &http.Server{
