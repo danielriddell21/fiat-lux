@@ -295,12 +295,15 @@ func parseDecision(r messagesResponse) (brain.Decision, error) {
 // happen to want the same compact JSON representation.
 func renderPerceptionJSON(p brain.Perception) string {
 	type rendered struct {
-		Tick          uint64    `json:"tick"`
-		EntityCount   int       `json:"entity_count"`
-		Entities      []entityV `json:"entities,omitempty"`
-		Relationships []relV    `json:"relationships,omitempty"`
-		RecentEvents  []eventV  `json:"recent_events,omitempty"`
-		Memories      []memoryV `json:"memories,omitempty"`
+		Tick          uint64        `json:"tick"`
+		EntityCount   int           `json:"entity_count"`
+		Entities      []entityV     `json:"entities,omitempty"`
+		Relationships []relV        `json:"relationships,omitempty"`
+		RecentEvents  []eventV      `json:"recent_events,omitempty"`
+		Memories      []memoryV     `json:"memories,omitempty"`
+		Focus         *focusV       `json:"focus,omitempty"`
+		Frontier      *frontierV    `json:"frontier,omitempty"`
+		Suggestions   []suggestionV `json:"spawn_suggestions,omitempty"`
 	}
 	r := rendered{Tick: p.Tick, EntityCount: p.EntityCount}
 	for _, e := range p.AliveEntities {
@@ -319,11 +322,52 @@ func renderPerceptionJSON(p brain.Perception) string {
 	for _, m := range p.Memories {
 		r.Memories = append(r.Memories, memoryV{Tick: m.Tick, Content: m.Content})
 	}
+	r.Focus = renderFocus(p.Focus)
+	r.Frontier = renderFrontier(p.Frontier)
+	for _, s := range p.Suggestions {
+		r.Suggestions = append(r.Suggestions, suggestionV{
+			EntityID: s.EntityID, Type: s.TypeLabel,
+			ChildCount: s.ChildCount, Reason: s.Reason,
+		})
+	}
 	out, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return fmt.Sprintf("(perception render failed: %v)", err)
 	}
 	return string(out)
+}
+
+func renderFocus(f *brain.FocusView) *focusV {
+	if f == nil {
+		return nil
+	}
+	out := &focusV{
+		EntityID:   f.EntityID,
+		Type:       f.TypeLabel,
+		TurnsLeft:  f.TurnsLeft,
+		DepthBelow: f.DepthBelow,
+	}
+	for _, e := range f.Subtree {
+		out.Subtree = append(out.Subtree, entityV{ID: e.ID, Type: e.TypeLabel, Props: e.Properties})
+	}
+	for _, r := range f.SubRels {
+		out.SubRels = append(out.SubRels, relV{ID: r.ID, From: r.From, To: r.To, Kind: r.Kind})
+	}
+	return out
+}
+
+func renderFrontier(f brain.FrontierView) *frontierV {
+	if len(f.Leaves) == 0 && len(f.DeepestPath) == 0 {
+		return nil
+	}
+	out := &frontierV{}
+	for _, l := range f.Leaves {
+		out.Leaves = append(out.Leaves, leafV{ID: l.EntityID, Type: l.TypeLabel, Depth: l.Depth})
+	}
+	for _, s := range f.DeepestPath {
+		out.DeepestPath = append(out.DeepestPath, stepV{ID: s.EntityID, Type: s.TypeLabel})
+	}
+	return out
 }
 
 type entityV struct {
@@ -344,6 +388,33 @@ type eventV struct {
 type memoryV struct {
 	Tick    uint64 `json:"tick"`
 	Content string `json:"content"`
+}
+type focusV struct {
+	EntityID   uint64    `json:"entity_id"`
+	Type       string    `json:"type"`
+	TurnsLeft  int       `json:"turns_left"`
+	DepthBelow int       `json:"depth_below"`
+	Subtree    []entityV `json:"subtree,omitempty"`
+	SubRels    []relV    `json:"subtree_relationships,omitempty"`
+}
+type frontierV struct {
+	Leaves      []leafV `json:"leaves,omitempty"`
+	DeepestPath []stepV `json:"deepest_path,omitempty"`
+}
+type leafV struct {
+	ID    uint64 `json:"id"`
+	Type  string `json:"type"`
+	Depth int    `json:"depth"`
+}
+type stepV struct {
+	ID   uint64 `json:"id"`
+	Type string `json:"type"`
+}
+type suggestionV struct {
+	EntityID   uint64 `json:"entity_id"`
+	Type       string `json:"type"`
+	ChildCount int    `json:"child_count"`
+	Reason     string `json:"reason"`
 }
 
 func redact(s string) string {

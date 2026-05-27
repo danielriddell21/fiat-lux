@@ -145,11 +145,22 @@ type Options struct {
 }
 
 // DefaultSystemPrompt is the canonical instruction passed to the
-// root creator.
-const DefaultSystemPrompt = `You exist. The world is empty. You have tools to create. ` +
-	`What you make is entirely your choice. Be brief - issue at most one tool ` +
-	`call per turn with a short justification. Below is what currently exists ` +
-	`and what you remember.`
+// root creator. It frames the soft "contains" convention, the
+// frontier the engine surfaces in perception, and the Zoom and
+// SpawnAgent tools the agent can use to drill into specific places.
+const DefaultSystemPrompt = `You exist. The world begins empty. You hold tools that let you create entities, relate them, and spawn agents. The simulation does not validate type_label, properties, or relationship kind — they are opaque strings that mean what you make them mean.
+
+Convention: a relationship with kind "contains" means the To entity is inside the From entity. The engine uses this only to surface where you can go deeper. A planet contains continents; a continent contains forests; a forest contains trees; a tree contains a squirrel. Build downward, not outward, unless the top is genuinely incomplete.
+
+When you Create, first ask: what already exists that should contain this? If nothing does, justify it briefly ("free-floating idea"). If your perception's frontier lists leaves, prefer drilling into one of them over adding another peer at the top level.
+
+Prerequisites are a heuristic, not a rule: list any in your thought ("trees need soil and water"), then either satisfy them or note why they don't apply ("this planet has no atmosphere; my trees don't need air"). The engine will not stop you.
+
+Use Zoom { entity_id } to pin focus on an entity for several turns; perception will then prepend that entity's sub-tree so you can detail it. Use Unzoom to release.
+
+When a node you've focused on grows past several children, you may SpawnAgent with that entity as its sole world-view by passing a system_prompt that names it. Delegation is optional; pick it when the sub-region deserves its own attention rather than another tick of yours.
+
+Be brief: one tool call per turn with a one-sentence justification. Below is the current world state, your recent memories, and your frontier.`
 
 // New constructs a Sim, spawning the root creator as an entity in
 // the world and attaching it to the given brain.
@@ -404,15 +415,19 @@ func (s *Sim) stepAgent(ctx context.Context, ag *agent.Agent, rt *agentRuntime) 
 	return res, nil
 }
 
-// invokeTool dispatches the agent's chosen tool. SpawnAgent and
-// Speak are intercepted here because they need access to per-world
-// agent state the registry cannot reach.
+// invokeTool dispatches the agent's chosen tool. SpawnAgent, Speak,
+// Zoom, and Unzoom are intercepted here because they need access to
+// per-world or per-agent state the registry cannot reach.
 func (s *Sim) invokeTool(ctx context.Context, ag *agent.Agent, call brain.ToolCall, tick world.Tick) (string, error) {
 	switch call.Name {
 	case "SpawnAgent":
 		return s.handleSpawn(ctx, ag, call.Args)
 	case "Speak":
 		return s.handleSpeak(ag, call.Args, tick)
+	case "Zoom":
+		return s.handleZoom(ag, call.Args)
+	case "Unzoom":
+		return s.handleUnzoom(ag)
 	}
 	return ag.Tools.Invoke(call, s.World, ag.EntityID)
 }
@@ -522,6 +537,52 @@ func (s *Sim) handleSpeak(speaker *agent.Agent, raw json.RawMessage, tick world.
 		other.DeliverHeard(ev)
 	}
 	return fmt.Sprintf("spoke to %d listener(s): %s", len(others), a.Content), nil
+}
+
+// defaultZoomTurns is used when the agent requests Zoom without
+// supplying a turns argument. maxZoomTurns caps the value the agent
+// may request so a single Zoom can't monopolise focus indefinitely.
+const (
+	defaultZoomTurns = 5
+	maxZoomTurns     = 20
+)
+
+func (s *Sim) handleZoom(ag *agent.Agent, raw json.RawMessage) (string, error) {
+	var a tools.ZoomArgs
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return "", fmt.Errorf("Zoom: bad args: %w", err)
+	}
+	if a.EntityID == 0 {
+		return "", errors.New("Zoom: entity_id must be > 0")
+	}
+	id := world.EntityID(a.EntityID)
+	if id == ag.EntityID {
+		return "", errors.New("Zoom: cannot focus on yourself")
+	}
+	e, ok := s.World.Entity(id)
+	if !ok || !e.IsAlive() {
+		return "", fmt.Errorf("Zoom: entity #%d not alive", a.EntityID)
+	}
+	turns := a.Turns
+	if turns <= 0 {
+		turns = defaultZoomTurns
+	}
+	if turns > maxZoomTurns {
+		turns = maxZoomTurns
+	}
+	ag.Focus = id
+	ag.FocusTurnsLeft = turns
+	return fmt.Sprintf("focused on %s #%d for %d turns", e.TypeLabel, id, turns), nil
+}
+
+func (s *Sim) handleUnzoom(ag *agent.Agent) (string, error) {
+	if ag.Focus == 0 {
+		return "no focus to release", nil
+	}
+	prev := ag.Focus
+	ag.Focus = 0
+	ag.FocusTurnsLeft = 0
+	return fmt.Sprintf("released focus on #%d", prev), nil
 }
 
 func (s *Sim) shouldSkip(ag *agent.Agent, rt *agentRuntime) bool {

@@ -518,6 +518,72 @@ func TestSpawnAgent_HonoursSpawnDepth(t *testing.T) {
 	}
 }
 
+func TestZoom_PinsFocus(t *testing.T) {
+	t.Parallel()
+	w, _ := world.New("kosmos")
+	planet, _ := w.Create(world.NoAgent, "planet", nil)
+
+	zoomCall := &brain.ToolCall{
+		Name: "Zoom",
+		Args: json.RawMessage(fmt.Sprintf(`{"entity_id":%d,"turns":7}`, planet)),
+	}
+	unzoomCall := &brain.ToolCall{Name: "Unzoom", Args: json.RawMessage(`{}`)}
+	br := &scriptedBrain{decisions: []brain.Decision{{ToolCall: zoomCall}, {ToolCall: unzoomCall}}}
+	s, err := New(Options{World: w, Brain: br})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Step(context.Background()); err != nil {
+		t.Fatalf("Step 1 (Zoom): %v", err)
+	}
+	ag := s.Agent()
+	if ag.Focus != planet {
+		t.Errorf("agent.Focus = %d, want %d", ag.Focus, planet)
+	}
+	// Zoom is intercepted after BuildPerception runs, so no decrement
+	// has happened yet at the end of step 1.
+	if ag.FocusTurnsLeft != 7 {
+		t.Errorf("FocusTurnsLeft = %d, want 7 immediately after Zoom", ag.FocusTurnsLeft)
+	}
+
+	if _, err := s.Step(context.Background()); err != nil {
+		t.Fatalf("Step 2 (Unzoom): %v", err)
+	}
+	if ag.Focus != 0 {
+		t.Errorf("agent.Focus = %d after Unzoom, want 0", ag.Focus)
+	}
+	if ag.FocusTurnsLeft != 0 {
+		t.Errorf("FocusTurnsLeft = %d after Unzoom, want 0", ag.FocusTurnsLeft)
+	}
+}
+
+func TestZoom_RejectsSelfFocus(t *testing.T) {
+	t.Parallel()
+	w, _ := world.New("kosmos")
+	// The Zoom call references the agent's own EntityID. Because the
+	// root agent is created during sim.New (always EntityID=1 in a
+	// fresh world), we can pin that ID in the arg blob up-front.
+	br := &scriptedBrain{decisions: []brain.Decision{{ToolCall: &brain.ToolCall{
+		Name: "Zoom",
+		Args: json.RawMessage(`{"entity_id":1}`),
+	}}}}
+	s, err := New(Options{World: w, Brain: br})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Agent().EntityID != 1 {
+		t.Fatalf("root agent id = %d, want 1 (test relies on this)", s.Agent().EntityID)
+	}
+	res, err := s.Step(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ToolErr == nil {
+		t.Errorf("expected ToolErr when zooming on self; got nil")
+	}
+}
+
 func TestClose_ClosesBrain(t *testing.T) {
 	t.Parallel()
 	s := mustNew(t, stub.New(0, 0, tools.Default()))

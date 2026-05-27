@@ -75,6 +75,26 @@ sequenceDiagram
 | `FindByType`     | Read-only. List live entities whose type matches. Returns structured JSON. |
 | `FindByProperty` | Read-only. List live entities where properties[key] matches a value.   |
 | `FindRelated`    | Read-only. List entities related to entity_id, optionally by relation kind. |
+| `Zoom`           | Pin focus on an entity for N turns; perception adds a `focus` sub-tree. |
+| `Unzoom`         | Release the current focus before its turns expire.                     |
+
+## Containment, focus, and the frontier
+
+"Contains" is a soft convention: a relationship whose `Kind` matches
+`"contains"` (case-insensitive) means the `To` entity is inside the
+`From` entity. The engine still does not interpret any type label or
+kind — but it uses this one convention to shape what the agent sees.
+Each `BuildPerception` walks the `contains` graph to derive:
+
+- `Frontier.Leaves` — parented entities with no children of their own,
+  surfacing where the world can be deepened.
+- `Frontier.DeepestPath` — one chain from a containment root down to
+  the deepest leaf.
+- `Focus` (when set by `Zoom`) — a depth-first sub-tree of the pinned
+  entity, capped at 64 nodes. Auto-expires after the requested turns.
+- `Suggestions` — entities that have grown past `frontierChildSpawnThreshold`
+  children, surfaced as candidates for a place-scoped `SpawnAgent`.
+  The engine never spawns; the LLM decides.
 
 ## Event sourcing
 

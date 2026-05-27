@@ -1,14 +1,30 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/danielriddell21/fiat-lux/internal/brain"
 	"github.com/danielriddell21/fiat-lux/internal/memory"
 	"github.com/danielriddell21/fiat-lux/internal/tools"
 	"github.com/danielriddell21/fiat-lux/internal/world"
+)
+
+// Tunables for the containment-aware perception. The frontier and
+// spawn-suggestion logic compute these every tick; keep the caps
+// small enough that the brain's prompt stays bounded on deep worlds.
+const (
+	frontierLeafCap              = 12
+	focusSubtreeCap              = 64
+	frontierChildSpawnThreshold  = 6
+	suggestionCooldownTicks      = 10
+	suggestionMemoryHorizonTicks = 100
+	maxSuggestionsPerTick        = 3
 )
 
 // Agent is the runtime brain attached to an agent-entity. It owns a
@@ -60,6 +76,21 @@ type Agent struct {
 	// the root creator. Zero for the root agent; one for its direct
 	// children; etc. Used to enforce MaxSpawnDepth.
 	SpawnDepth int
+
+	// Focus is the EntityID the agent has pinned for drill-down via
+	// the Zoom tool, or zero when no focus is set. Cleared when the
+	// focused entity is destroyed or FocusTurnsLeft reaches zero.
+	Focus world.EntityID
+
+	// FocusTurnsLeft is the number of upcoming turns Focus remains
+	// pinned. Decremented at the end of each BuildPerception call;
+	// when it hits zero, Focus is cleared.
+	FocusTurnsLeft int
+
+	// suggestionsLastTick is keyed by EntityID and holds the tick at
+	// which a SpawnSuggestion was last emitted for that entity, used
+	// to dedupe nudges across consecutive BuildPerception calls.
+	suggestionsLastTick map[world.EntityID]uint64
 
 	// inbox holds Heard events delivered by Speak from other
 	// agents in the same world. Drained into Perception.Heard by
@@ -191,19 +222,36 @@ func (a *Agent) RetrieveMemories(ctx context.Context, query string, tick world.T
 // BuildPerception assembles a Perception snapshot from the world.
 // memories are the retrieved records to inject; may be nil.
 // heard contains broadcasts drained from this agent's inbox; may
-// be nil.
+// be nil. As a side effect, BuildPerception clears focus when the
+// focused entity is dead and decrements the focus turn counter,
+// clearing it when it reaches zero.
 func (a *Agent) BuildPerception(w *world.World, memories []memory.Record, heard []brain.HeardEvent) brain.Perception {
 	ents := w.Entities()
 	rels := w.Relationships()
 	allEvents := w.Events()
+	tick := w.Tick()
+
+	// Lifecycle: a focus pinned on an entity that no longer exists
+	// must be cleared before we build any focus view.
+	if a.Focus != 0 {
+		alive := slices.ContainsFunc(ents, func(e world.Entity) bool {
+			return e.ID == a.Focus
+		})
+		if !alive {
+			a.Focus = 0
+			a.FocusTurnsLeft = 0
+		}
+	}
 
 	pe := make([]brain.EntityView, len(ents))
+	entByID := make(map[world.EntityID]brain.EntityView, len(ents))
 	for i, e := range ents {
 		pe[i] = brain.EntityView{
 			ID:         uint64(e.ID),
 			TypeLabel:  e.TypeLabel,
 			Properties: e.Properties,
 		}
+		entByID[e.ID] = pe[i]
 	}
 	pr := make([]brain.RelationshipView, len(rels))
 	for i, r := range rels {
@@ -231,15 +279,38 @@ func (a *Agent) BuildPerception(w *world.World, memories []memory.Record, heard 
 			Summary:  summariseEvent(e),
 		})
 	}
-	return brain.Perception{
-		Tick:               uint64(w.Tick()),
+
+	children, parents := buildContainmentGraph(rels)
+	depth := assignDepth(ents, children, parents)
+
+	p := brain.Perception{
+		Tick:               uint64(tick),
 		EntityCount:        w.EntityCount(),
 		AliveEntities:      pe,
 		AliveRelationships: pr,
 		RecentEvents:       recent,
 		Memories:           memory.PerceptionViews(memories),
 		Heard:              heard,
+		Frontier:           buildFrontier(ents, children, parents, depth),
+		Suggestions:        a.collectSuggestions(ents, children, tick),
 	}
+
+	if a.Focus != 0 {
+		p.Focus = buildFocusView(a.Focus, a.FocusTurnsLeft, entByID, children, rels)
+		// If the focus entity vanished between the alive-check above
+		// and the lookup (shouldn't happen, but be defensive), nil out.
+		if p.Focus == nil {
+			a.Focus = 0
+			a.FocusTurnsLeft = 0
+		} else if a.FocusTurnsLeft > 0 {
+			a.FocusTurnsLeft--
+			if a.FocusTurnsLeft == 0 {
+				a.Focus = 0
+			}
+		}
+	}
+
+	return p
 }
 
 // MarkSeen advances the agent's SeenEventID to the highest event ID
@@ -254,6 +325,302 @@ func (a *Agent) MarkSeen(w *world.World) {
 	if high > a.SeenEventID {
 		a.SeenEventID = high
 	}
+}
+
+// containsKind reports whether a relationship kind designates the
+// soft "contains" hierarchy. Case-insensitive: the engine never
+// interprets kinds, but "Contains" or "CONTAINS" should still feed
+// the frontier so the LLM gets a forgiving affordance.
+func containsKind(k string) bool { return strings.EqualFold(k, "contains") }
+
+// buildContainmentGraph projects relationships into outgoing and
+// incoming "contains" adjacency maps. Soft-deleted relationships are
+// already filtered upstream (w.Relationships() returns live only).
+func buildContainmentGraph(rels []world.Relationship) (children, parents map[world.EntityID][]world.EntityID) {
+	children = map[world.EntityID][]world.EntityID{}
+	parents = map[world.EntityID][]world.EntityID{}
+	for _, r := range rels {
+		if !containsKind(r.Kind) {
+			continue
+		}
+		children[r.From] = append(children[r.From], r.To)
+		parents[r.To] = append(parents[r.To], r.From)
+	}
+	return children, parents
+}
+
+// assignDepth runs a BFS from each containment root (alive non-agent
+// entity with no incoming "contains" edge) and returns the shortest
+// distance in edges from any root.
+func assignDepth(
+	ents []world.Entity,
+	children, parents map[world.EntityID][]world.EntityID,
+) map[world.EntityID]int {
+	depth := map[world.EntityID]int{}
+	queue := make([]world.EntityID, 0, len(ents))
+	for _, e := range ents {
+		if e.TypeLabel == "agent" {
+			continue
+		}
+		if len(parents[e.ID]) == 0 {
+			depth[e.ID] = 0
+			queue = append(queue, e.ID)
+		}
+	}
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		d := depth[n]
+		for _, c := range children[n] {
+			if existing, ok := depth[c]; !ok || d+1 < existing {
+				depth[c] = d + 1
+				queue = append(queue, c)
+			}
+		}
+	}
+	return depth
+}
+
+// buildFrontier collects the deepest leaf entities and one chain
+// from a root down to the deepest leaf. Returns the zero value when
+// no "contains" edges exist. A leaf must be parented (have an
+// incoming "contains" edge) and childless; orphans and roots are
+// not leaves.
+func buildFrontier(
+	ents []world.Entity,
+	children, parents map[world.EntityID][]world.EntityID,
+	depth map[world.EntityID]int,
+) brain.FrontierView {
+	leaves := make([]brain.FrontierLeaf, 0, len(ents))
+	for _, e := range ents {
+		if e.TypeLabel == "agent" {
+			continue
+		}
+		if len(parents[e.ID]) == 0 {
+			continue
+		}
+		if len(children[e.ID]) > 0 {
+			continue
+		}
+		d, ok := depth[e.ID]
+		if !ok {
+			continue
+		}
+		leaves = append(leaves, brain.FrontierLeaf{
+			EntityID:  uint64(e.ID),
+			TypeLabel: e.TypeLabel,
+			Depth:     d,
+		})
+	}
+	slices.SortFunc(leaves, func(a, b brain.FrontierLeaf) int {
+		return cmp.Or(
+			cmp.Compare(b.Depth, a.Depth),
+			cmp.Compare(a.EntityID, b.EntityID),
+		)
+	})
+	if len(leaves) > frontierLeafCap {
+		leaves = leaves[:frontierLeafCap]
+	}
+
+	deepest := longestContainmentPath(ents, children, depth)
+
+	return brain.FrontierView{
+		Leaves:      leaves,
+		DeepestPath: deepest,
+	}
+}
+
+// longestContainmentPath does a DFS from each containment root and
+// returns the longest chain in nodes (path length in edges + 1).
+// Ties are broken by smallest IDs along the chain so the result is
+// deterministic.
+func longestContainmentPath(
+	ents []world.Entity,
+	children map[world.EntityID][]world.EntityID,
+	depth map[world.EntityID]int,
+) []brain.FrontierStep {
+	// Roots are entities at depth 0 with at least one child; an
+	// entity with no edges at all is an orphan, not the root of a
+	// containment chain.
+	roots := make([]world.EntityID, 0)
+	for _, e := range ents {
+		if e.TypeLabel == "agent" {
+			continue
+		}
+		if d, ok := depth[e.ID]; ok && d == 0 && len(children[e.ID]) > 0 {
+			roots = append(roots, e.ID)
+		}
+	}
+	slices.Sort(roots)
+
+	entByID := make(map[world.EntityID]world.Entity, len(ents))
+	for _, e := range ents {
+		entByID[e.ID] = e
+	}
+
+	var best []world.EntityID
+	var dfs func(n world.EntityID, path []world.EntityID)
+	dfs = func(n world.EntityID, path []world.EntityID) {
+		path = append(path, n)
+		kids := children[n]
+		if len(kids) == 0 {
+			if len(path) > len(best) || (len(path) == len(best) && slices.Compare(path, best) < 0) {
+				best = slices.Clone(path)
+			}
+			return
+		}
+		// Sort kids for deterministic tie-breaking.
+		sorted := slices.Clone(kids)
+		slices.Sort(sorted)
+		for _, c := range sorted {
+			dfs(c, path)
+		}
+	}
+	for _, r := range roots {
+		dfs(r, nil)
+	}
+	if len(best) == 0 {
+		return nil
+	}
+	out := make([]brain.FrontierStep, len(best))
+	for i, id := range best {
+		e := entByID[id]
+		out[i] = brain.FrontierStep{
+			EntityID:  uint64(id),
+			TypeLabel: e.TypeLabel,
+		}
+	}
+	return out
+}
+
+// buildFocusView walks the "contains" sub-tree rooted at focus,
+// capped at focusSubtreeCap nodes. Returns nil when the focus
+// entity is not in entByID (caller already cleared lifecycle state).
+func buildFocusView(
+	focus world.EntityID,
+	turnsLeft int,
+	entByID map[world.EntityID]brain.EntityView,
+	children map[world.EntityID][]world.EntityID,
+	rels []world.Relationship,
+) *brain.FocusView {
+	root, ok := entByID[focus]
+	if !ok {
+		return nil
+	}
+	visited := map[world.EntityID]bool{focus: true}
+	subtree := make([]brain.EntityView, 0)
+	type frame struct {
+		id    world.EntityID
+		depth int
+	}
+	stack := []frame{{focus, 0}}
+	depthBelow := 0
+	for len(stack) > 0 && len(subtree) < focusSubtreeCap {
+		f := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		// Children sorted for deterministic ordering.
+		kids := slices.Clone(children[f.id])
+		slices.Sort(kids)
+		for _, c := range kids {
+			if visited[c] {
+				continue
+			}
+			visited[c] = true
+			view, ok := entByID[c]
+			if !ok {
+				continue
+			}
+			subtree = append(subtree, view)
+			depthBelow = max(depthBelow, f.depth+1)
+			if len(subtree) >= focusSubtreeCap {
+				break
+			}
+			stack = append(stack, frame{c, f.depth + 1})
+		}
+	}
+
+	subRels := make([]brain.RelationshipView, 0)
+	for _, r := range rels {
+		if visited[r.From] && visited[r.To] {
+			subRels = append(subRels, brain.RelationshipView{
+				ID:   uint64(r.ID),
+				From: uint64(r.From),
+				To:   uint64(r.To),
+				Kind: r.Kind,
+			})
+		}
+	}
+
+	return &brain.FocusView{
+		EntityID:   uint64(focus),
+		TypeLabel:  root.TypeLabel,
+		TurnsLeft:  turnsLeft,
+		Subtree:    subtree,
+		SubRels:    subRels,
+		DepthBelow: depthBelow,
+	}
+}
+
+// collectSuggestions returns place-scoped sub-agent nudges for
+// entities that have grown past frontierChildSpawnThreshold children
+// since the last suggestion was emitted. It mutates the agent's
+// dedupe cache so the same entity isn't surfaced every tick.
+func (a *Agent) collectSuggestions(
+	ents []world.Entity,
+	children map[world.EntityID][]world.EntityID,
+	tick world.Tick,
+) []brain.SpawnSuggestion {
+	if a.suggestionsLastTick == nil {
+		a.suggestionsLastTick = make(map[world.EntityID]uint64)
+	}
+	// Bound the dedupe map: drop entries older than the horizon.
+	var horizon uint64
+	if uint64(tick) > suggestionMemoryHorizonTicks {
+		horizon = uint64(tick) - suggestionMemoryHorizonTicks
+	}
+	maps.DeleteFunc(a.suggestionsLastTick, func(_ world.EntityID, lastTick uint64) bool {
+		return lastTick < horizon
+	})
+
+	cooldown := uint64(suggestionCooldownTicks)
+	suggestions := make([]brain.SpawnSuggestion, 0)
+	for _, e := range ents {
+		if e.TypeLabel == "agent" {
+			continue
+		}
+		count := len(children[e.ID])
+		if count < frontierChildSpawnThreshold {
+			continue
+		}
+		if last, seen := a.suggestionsLastTick[e.ID]; seen && uint64(tick) < last+cooldown {
+			continue
+		}
+		suggestions = append(suggestions, brain.SpawnSuggestion{
+			EntityID:   uint64(e.ID),
+			TypeLabel:  e.TypeLabel,
+			ChildCount: count,
+			Reason: fmt.Sprintf(
+				"%d children; consider SpawnAgent scoped here",
+				count,
+			),
+		})
+	}
+	if len(suggestions) == 0 {
+		return nil
+	}
+	slices.SortFunc(suggestions, func(a, b brain.SpawnSuggestion) int {
+		return cmp.Or(
+			cmp.Compare(b.ChildCount, a.ChildCount),
+			cmp.Compare(a.EntityID, b.EntityID),
+		)
+	})
+	if len(suggestions) > maxSuggestionsPerTick {
+		suggestions = suggestions[:maxSuggestionsPerTick]
+	}
+	for _, s := range suggestions {
+		a.suggestionsLastTick[world.EntityID(s.EntityID)] = uint64(tick)
+	}
+	return suggestions
 }
 
 func summariseEvent(e world.Event) string {
