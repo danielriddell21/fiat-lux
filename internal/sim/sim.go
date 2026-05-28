@@ -830,18 +830,18 @@ const (
 func (s *Sim) handleZoom(ag *agent.Agent, raw json.RawMessage) (string, error) {
 	var a tools.ZoomArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return "", fmt.Errorf("Zoom: bad args: %w", err)
+		return "", fmt.Errorf("zoom: bad args: %w", err)
 	}
 	if a.EntityID == 0 {
-		return "", errors.New("Zoom: entity_id must be > 0")
+		return "", errors.New("zoom: entity_id must be > 0")
 	}
 	id := world.EntityID(a.EntityID)
 	if id == ag.EntityID {
-		return "", errors.New("Zoom: cannot focus on yourself")
+		return "", errors.New("zoom: cannot focus on yourself")
 	}
 	e, ok := s.World.Entity(id)
 	if !ok || !e.IsAlive() {
-		return "", fmt.Errorf("Zoom: entity #%d not alive", a.EntityID)
+		return "", fmt.Errorf("zoom: entity #%d not alive", a.EntityID)
 	}
 	turns := a.Turns
 	if turns <= 0 {

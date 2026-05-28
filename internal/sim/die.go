@@ -30,7 +30,7 @@ func (s *Sim) handleDie(ctx context.Context, ag *agent.Agent, raw json.RawMessag
 	var a tools.DieArgs
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &a); err != nil {
-			return "", fmt.Errorf("Die: bad args: %w", err)
+			return "", fmt.Errorf("die: bad args: %w", err)
 		}
 	}
 
@@ -47,7 +47,7 @@ func (s *Sim) handleDie(ctx context.Context, ag *agent.Agent, raw json.RawMessag
 		opts := memory.AddOptions{Embedder: child.Embedder, Scorer: child.Importance}
 		for _, content := range digest {
 			if _, err := child.Memory.Add(ctx, child.EntityID, memory.KindInheritance, content, tick, opts); err != nil {
-				return "", fmt.Errorf("Die: inherit to #%d: %w", child.EntityID, err)
+				return "", fmt.Errorf("die: inherit to #%d: %w", child.EntityID, err)
 			}
 		}
 	}

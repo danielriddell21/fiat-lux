@@ -387,7 +387,7 @@ func TestFindRelated_OutgoingAndIncoming(t *testing.T) {
 	planet, _ := w.Create(1, "planet", world.Properties{"name": "Erith"})
 	ocean, _ := w.Create(1, "ocean", world.Properties{"name": "Mare"})
 	mountain, _ := w.Create(1, "mountain", nil)
-	_, _ = w.Relate(1, ocean, planet, "part of")    // ocean -> planet
+	_, _ = w.Relate(1, ocean, planet, "part of")     // ocean -> planet
 	_, _ = w.Relate(1, planet, mountain, "contains") // planet -> mountain
 
 	out, err := FindRelated().Apply(w, 1, json.RawMessage(`{"entity_id":`+itoa(uint64(planet))+`}`))
