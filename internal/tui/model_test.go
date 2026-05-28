@@ -338,12 +338,12 @@ func TestSpeedKeys_AdjustTickInterval(t *testing.T) {
 	m := newModel(t, nil)
 	start := m.tickInterval
 	m = sendKey(t, m, "+")
-	if !(m.tickInterval < start) {
+	if m.tickInterval >= start {
 		t.Errorf("'+' tick interval = %s, want < %s", m.tickInterval, start)
 	}
 	mFast := m
 	m = sendKey(t, m, "-")
-	if !(m.tickInterval > mFast.tickInterval) {
+	if m.tickInterval <= mFast.tickInterval {
 		t.Errorf("'-' tick interval = %s, want > %s", m.tickInterval, mFast.tickInterval)
 	}
 	// Hammer '+' until clamped, then check the floor holds.

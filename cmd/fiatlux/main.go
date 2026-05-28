@@ -17,9 +17,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strconv"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -345,10 +345,10 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		}
 		go func() {
 			err := store.RunAutosave(ctx, concreteStore, w, mode.Interval, func(saveErr error) {
-				fmt.Fprintln(stderr, "autosave:", saveErr)
+				_, _ = fmt.Fprintln(stderr, "autosave:", saveErr)
 			})
 			if err != nil && !errors.Is(err, context.Canceled) {
-				fmt.Fprintln(stderr, "autosave:", err)
+				_, _ = fmt.Fprintln(stderr, "autosave:", err)
 			}
 		}()
 	}
@@ -1394,10 +1394,10 @@ func cmdServe(args []string, stdout, stderr io.Writer) error {
 		}
 		go func() {
 			err := store.RunAutosave(ctx, concreteStore, w, mode.Interval, func(saveErr error) {
-				fmt.Fprintln(stderr, "autosave:", saveErr)
+				_, _ = fmt.Fprintln(stderr, "autosave:", saveErr)
 			})
 			if err != nil && !errors.Is(err, context.Canceled) {
-				fmt.Fprintln(stderr, "autosave:", err)
+				_, _ = fmt.Fprintln(stderr, "autosave:", err)
 			}
 		}()
 	}
@@ -1413,14 +1413,14 @@ func cmdServe(args []string, stdout, stderr io.Writer) error {
 			if st != nil {
 				saveCtx, cancelSave := context.WithTimeout(context.Background(), 5*time.Second)
 				if err := st.Save(saveCtx, w); err != nil {
-					fmt.Fprintln(stderr, "final save:", err)
+					_, _ = fmt.Fprintln(stderr, "final save:", err)
 				}
 				cancelSave()
 			}
 			return nil
 		case <-ticker.C:
 			if _, err := loop.Step(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				fmt.Fprintln(stderr, "step:", err)
+				_, _ = fmt.Fprintln(stderr, "step:", err)
 			}
 		}
 	}

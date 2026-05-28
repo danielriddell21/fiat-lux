@@ -68,10 +68,10 @@ func TestBuildEmbedder(t *testing.T) {
 		wantErr bool
 		wantNil bool
 	}{
-		{spec: "", wantNil: false},        // zero
-		{spec: "zero", wantNil: false},    // zero
-		{spec: "hash", wantNil: false},    // hash
-		{spec: "ollama", wantNil: false},  // ollama with default model
+		{spec: "", wantNil: false},       // zero
+		{spec: "zero", wantNil: false},   // zero
+		{spec: "hash", wantNil: false},   // hash
+		{spec: "ollama", wantNil: false}, // ollama with default model
 		{spec: "ollama:nomic-embed-text", wantNil: false},
 		{spec: "bogus", wantErr: true},
 	}
@@ -95,7 +95,7 @@ func TestBuildEmbedder(t *testing.T) {
 		})
 	}
 	// Compile-time assertion that buildEmbedder returns memory.Embedder.
-	var _ func(string) (memory.Embedder, error) = buildEmbedder
+	_ = (func(string) (memory.Embedder, error))(buildEmbedder)
 }
 
 func TestChainObservers(t *testing.T) {

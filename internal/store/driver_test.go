@@ -61,7 +61,7 @@ func TestParseSaveMode(t *testing.T) {
 		{input: "interval:30s", wantKind: "interval"},
 		{input: "interval:1m", wantKind: "interval"},
 		{input: "interval: 5s", wantKind: "interval"}, // tolerate space
-		{input: "interval:0s", wantErr: true},          // non-positive
+		{input: "interval:0s", wantErr: true},         // non-positive
 		{input: "interval:bogus", wantErr: true},
 		{input: "always", wantErr: true},
 		{input: "interval", wantErr: true},

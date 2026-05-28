@@ -110,7 +110,7 @@ func (c *Client) Generate(ctx context.Context, prompt string) ([]byte, string, e
 	if err != nil {
 		return nil, "", fmt.Errorf("openai imagegen: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, "", err
