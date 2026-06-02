@@ -48,7 +48,7 @@ dockers:
     use: buildx
     goos: linux
     goarch: amd64
-    dockerfile: Dockerfile.goreleaser
+    dockerfile: Dockerfile
     image_templates:
       - "ghcr.io/danielriddell21/fiat-lux:{{ .Version }}-amd64"
       - "ghcr.io/danielriddell21/fiat-lux:latest-amd64"
@@ -61,7 +61,7 @@ dockers:
     use: buildx
     goos: linux
     goarch: arm64
-    dockerfile: Dockerfile.goreleaser
+    dockerfile: Dockerfile
     image_templates:
       - "ghcr.io/danielriddell21/fiat-lux:{{ .Version }}-arm64"
       - "ghcr.io/danielriddell21/fiat-lux:latest-arm64"
@@ -82,10 +82,31 @@ docker_manifests:
       - "ghcr.io/danielriddell21/fiat-lux:latest-arm64"
 
 changelog:
-  use: github
   sort: asc
   filters:
     exclude:
       - "^docs:"
-      - "^chore:"
       - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+release:
+  name_template: "v{{ .Version }}"
+
+brews:
+  - name: fiatlux
+    repository:
+      owner: danielriddell21
+      name: homebrew-tap
+      branch: trunk
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/danielriddell21/fiat-lux
+    description: "Let there be light."
+    license: MIT
+    commit_msg_template: "Brew formula update for fiat-lux {{ .Tag }}"
+    install: |
+      bin.install "fiatlux"
+    test: |
+      system "#{bin}/fiatlux", "--version"
