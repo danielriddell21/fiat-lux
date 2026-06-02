@@ -2,6 +2,12 @@
 
 > *Let there be light.*
 
+[![CI](https://github.com/danielriddell21/fiat-lux/actions/workflows/ci.yml/badge.svg)](https://github.com/danielriddell21/fiat-lux/actions/workflows/ci.yml)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=danielriddell21_fiat-lux&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=danielriddell21_fiat-lux)
+[![codecov](https://codecov.io/gh/danielriddell21/fiat-lux/graph/badge.svg)](https://codecov.io/gh/danielriddell21/fiat-lux)
+[![Go 1.26](https://img.shields.io/badge/go-1.26-blue)](https://go.dev)
+[![MIT License](https://img.shields.io/badge/licence-MIT-green)](LICENSE)
+
 **fiat-lux** drops an AI model into a void and gives it the tools of a
 creator. There is no pre-built world, no map, no laws. There is an
 agent, an empty registry, and a vocabulary of creation. What the agent
@@ -38,6 +44,13 @@ just build
 
 Press `space` to unpause. See [docs/quickstart.md](./docs/quickstart.md)
 for Ollama, Anthropic, OpenAI, multi-world, and replay walkthroughs.
+
+## Install
+
+### Homebrew
+```bash
+brew install danielriddell21/tap/fiatlux
+```
 
 ## Docs
 
