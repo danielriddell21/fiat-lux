@@ -5,9 +5,29 @@ on:
     types: [released]
 
 jobs:
+  retag:
+    name: Retag image
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retag as latest
+        run: |
+          VERSION=${{ github.event.release.tag_name }}
+          docker pull ghcr.io/danielriddell21/fiat-lux:${VERSION}
+          docker tag  ghcr.io/danielriddell21/fiat-lux:${VERSION} ghcr.io/danielriddell21/fiat-lux:latest
+          docker push ghcr.io/danielriddell21/fiat-lux:latest
+          
   update-manifests:
     name: Pin version in riddellious-dev
     runs-on: ubuntu-latest
+    needs: retag
     permissions:
       contents: read
     steps:
