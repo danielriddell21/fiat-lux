@@ -35,7 +35,7 @@ func TestRunPrintsBanner(t *testing.T) {
 func TestRunVersionFlag(t *testing.T) {
 	t.Parallel()
 
-	for _, arg := range []string{"-version", "--version", "version"} {
+	for _, arg := range []string{"--version", "version"} {
 		var buf bytes.Buffer
 		if err := run([]string{arg}, &buf, io.Discard); err != nil {
 			t.Fatalf("run %s returned error: %v", arg, err)

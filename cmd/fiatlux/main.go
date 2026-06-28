@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -24,6 +23,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/danielriddell21/fiat-lux/internal/brain"
 	"github.com/danielriddell21/fiat-lux/internal/brain/anthropic"
@@ -59,54 +60,77 @@ const banner = `
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "fiatlux:", err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
+// run builds the Cobra command tree and dispatches args. stdout/stderr are
+// threaded through so tests can capture output. A nil/empty args slice prints
+// the banner.
 func run(args []string, stdout, stderr io.Writer) error {
-	if len(args) > 0 {
-		switch args[0] {
-		case "run":
-			return cmdRun(args[1:], stdout, stderr)
-		case "replay":
-			return cmdReplay(args[1:], stdout, stderr)
-		case "step":
-			return cmdStep(args[1:], stdout, stderr)
-		case "serve":
-			return cmdServe(args[1:], stdout, stderr)
-		case "help", "-h", "--help":
-			return printHelp(stdout)
-		case "-version", "--version", "version":
-			_, _ = fmt.Fprintln(stdout, version)
-			return nil
-		}
+	if args == nil {
+		args = []string{}
 	}
-	return printBanner(args, stdout)
+	root := newRootCmd(stdout, stderr)
+	root.SetArgs(args)
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	if err := root.Execute(); err != nil {
+		return fmt.Errorf("fiatlux: %w", err)
+	}
+	return nil
 }
 
-func printBanner(args []string, out io.Writer) error {
-	fs := flag.NewFlagSet("fiatlux", flag.ContinueOnError)
-	fs.SetOutput(out)
-	showVersion := fs.Bool("version", false, "print version and exit")
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
+func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
+	root := &cobra.Command{
+		Use:           "fiatlux",
+		Short:         "Drop an AI agent into an empty world and watch it create",
+		Long:          helpText,
+		Version:       version,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return printBanner(stdout)
+		},
 	}
-	if *showVersion {
-		_, _ = fmt.Fprintln(out, version)
-		return nil
+	root.SetVersionTemplate("{{.Version}}\n")
+	root.AddCommand(
+		cmdRun(stdout, stderr),
+		cmdReplay(stdout, stderr),
+		cmdStep(stdout, stderr),
+		cmdServe(stdout, stderr),
+		versionCmd(stdout),
+		completionCmd(),
+	)
+	return root
+}
+
+// versionCmd prints the bare version string (mirrors --version).
+func versionCmd(stdout io.Writer) *cobra.Command {
+	return &cobra.Command{
+		Use:          "version",
+		Short:        "Print the CLI version",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, _ = fmt.Fprintln(stdout, version)
+			return nil
+		},
 	}
+}
+
+func printBanner(out io.Writer) error {
 	_, _ = fmt.Fprint(out, banner)
 	_, _ = fmt.Fprintf(out, "\n  version: %s\n", version)
 	_, _ = fmt.Fprintln(out, "  try 'fiatlux run' for the TUI, 'fiatlux serve' for the web viewer, or 'fiatlux help' for options.")
 	return nil
 }
 
-func printHelp(out io.Writer) error {
-	_, _ = fmt.Fprintln(out, `Usage:
+const helpText = `Usage:
 
   fiatlux                       Print banner and version.
-  fiatlux -version              Print version.
+  fiatlux version               Print version.
   fiatlux run [flags]           Launch the TUI.
   fiatlux replay --db <dsn> --world <name> [--replay-tick <duration>]
                                 Replay a saved world tick by tick.
@@ -163,54 +187,78 @@ run flags:
                         interval:<dur>      periodic background save,
                                             e.g. interval:30s
                       Also configurable via YAML 'save.mode'; the
-                      flag wins when both set.`)
-	return nil
+                      flag wins when both set.`
+
+func cmdRun(stdout, stderr io.Writer) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:          "run",
+		Short:        "Launch the TUI",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+	}
+	f := cmd.Flags()
+	worldName := f.String("world", "kosmos", "name of the world to open or create")
+	dbPath := f.String("db", "", "SQLite database path (empty = in-memory, no persistence)")
+	brainSpec := f.String("brain", "stub", "brain config; see 'fiatlux help'")
+	tickInterval := f.Duration("tick", tui.DefaultTickInterval, "sim tick interval")
+	embedderSpec := f.String("embedder", "zero", "memory embedder (zero | hash | ollama[:model] | openai[:model])")
+	importanceSpec := f.String("importance", "heuristic", "memory importance scorer (heuristic | llm)")
+	reflectInterval := f.Uint64("reflect-interval", 20, "ticks between reflection passes (0 = disable)")
+	maxAgents := f.Int("max-agents", 8, "cap on total agents per world")
+	maxSpawnDepth := f.Int("max-spawn-depth", 3, "cap on the spawn graph height")
+	configPath := f.String("config", "", "YAML config for a multi-world universe (overrides --brain)")
+	webAddr := f.String("web-addr", "", "address to bind the optional web viewer (e.g. 127.0.0.1:8080)")
+	saveMode := f.String("save-mode", "", "persistence cadence: manual | interval:<duration> (e.g. interval:30s)")
+	multimodalSpec := f.String("multimodal", "", "image generator: '' (use YAML or disabled) | none | openai[:model] | openaicompat:<base_url>::<model>")
+	imageCacheDir := f.String("image-cache", "", "directory for generated images (default: $XDG_CACHE_HOME/fiatlux/images)")
+	narratorSpec := f.String("narrator", "", "global narrator brain spec (overrides YAML); '' = use YAML, 'none' = disable")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		return runRun(stdout, stderr, runFlags{
+			worldName: *worldName, dbPath: *dbPath, brainSpec: *brainSpec,
+			tickInterval: *tickInterval, embedderSpec: *embedderSpec, importanceSpec: *importanceSpec,
+			reflectInterval: *reflectInterval, maxAgents: *maxAgents, maxSpawnDepth: *maxSpawnDepth,
+			configPath: *configPath, webAddr: *webAddr, saveMode: *saveMode,
+			multimodalSpec: *multimodalSpec, imageCacheDir: *imageCacheDir, narratorSpec: *narratorSpec,
+		})
+	}
+	return cmd
 }
 
-func cmdRun(args []string, stdout, stderr io.Writer) error {
-	fs := flag.NewFlagSet("fiatlux run", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	worldName := fs.String("world", "kosmos", "name of the world to open or create")
-	dbPath := fs.String("db", "", "SQLite database path (empty = in-memory, no persistence)")
-	brainSpec := fs.String("brain", "stub", "brain config; see 'fiatlux help'")
-	tickInterval := fs.Duration("tick", tui.DefaultTickInterval, "sim tick interval")
-	embedderSpec := fs.String("embedder", "zero", "memory embedder (zero | hash | ollama[:model] | openai[:model])")
-	importanceSpec := fs.String("importance", "heuristic", "memory importance scorer (heuristic | llm)")
-	reflectInterval := fs.Uint64("reflect-interval", 20, "ticks between reflection passes (0 = disable)")
-	maxAgents := fs.Int("max-agents", 8, "cap on total agents per world")
-	maxSpawnDepth := fs.Int("max-spawn-depth", 3, "cap on the spawn graph height")
-	configPath := fs.String("config", "", "YAML config for a multi-world universe (overrides --brain)")
-	webAddr := fs.String("web-addr", "", "address to bind the optional web viewer (e.g. 127.0.0.1:8080)")
-	saveMode := fs.String("save-mode", "", "persistence cadence: manual | interval:<duration> (e.g. interval:30s)")
-	multimodalSpec := fs.String("multimodal", "", "image generator: '' (use YAML or disabled) | none | openai[:model] | openaicompat:<base_url>::<model>")
-	imageCacheDir := fs.String("image-cache", "", "directory for generated images (default: $XDG_CACHE_HOME/fiatlux/images)")
-	narratorSpec := fs.String("narrator", "", "global narrator brain spec (overrides YAML); '' = use YAML, 'none' = disable")
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
-	}
+// runFlags holds the resolved flags for the run command.
+type runFlags struct {
+	worldName, dbPath, brainSpec  string
+	tickInterval                  time.Duration
+	embedderSpec, importanceSpec  string
+	reflectInterval               uint64
+	maxAgents, maxSpawnDepth      int
+	configPath, webAddr, saveMode string
+	multimodalSpec, imageCacheDir string
+	narratorSpec                  string
+}
 
+func runRun(stdout, stderr io.Writer, fl runFlags) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	st, closeStore, err := openStore(ctx, *dbPath)
+	st, closeStore, err := openStore(ctx, fl.dbPath)
 	if err != nil {
 		return err
 	}
 	defer closeStore()
 
-	w, err := loadOrNewWorld(ctx, st, *worldName)
+	w, err := loadOrNewWorld(ctx, st, fl.worldName)
 	if err != nil {
 		return err
 	}
 
 	rc, err := buildRunComponents(ctx, w, st, runComponentOpts{
-		embedderSpec:  *embedderSpec,
-		configPath:    *configPath,
-		brainSpec:     *brainSpec,
-		importance:    *importanceSpec,
-		reflect:       *reflectInterval,
-		maxAgents:     *maxAgents,
-		maxSpawnDepth: *maxSpawnDepth,
+		embedderSpec:  fl.embedderSpec,
+		configPath:    fl.configPath,
+		brainSpec:     fl.brainSpec,
+		importance:    fl.importanceSpec,
+		reflect:       fl.reflectInterval,
+		maxAgents:     fl.maxAgents,
+		maxSpawnDepth: fl.maxSpawnDepth,
 	})
 	if err != nil {
 		return err
@@ -236,8 +284,8 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	// Each resolved setting takes the CLI flag when set, else the YAML value.
 	// (For multimodal, blank CLI means "use YAML"; explicit "none" disables.)
 	imageCache, err := setupMultimodal(attachOnSims,
-		firstNonEmpty(*multimodalSpec, yamlMultimodal),
-		firstNonEmpty(*imageCacheDir, yamlImageCache), yamlMultimodalMM)
+		firstNonEmpty(fl.multimodalSpec, yamlMultimodal),
+		firstNonEmpty(fl.imageCacheDir, yamlImageCache), yamlMultimodalMM)
 	if err != nil {
 		return err
 	}
@@ -246,11 +294,11 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	// means "use whatever YAML configured"; "none" disables on every
 	// world; any other spec installs a narrator on every world with
 	// that brain.
-	if err := applyNarratorOverride(*narratorSpec, attachOnSims); err != nil {
+	if err := applyNarratorOverride(fl.narratorSpec, attachOnSims); err != nil {
 		return fmt.Errorf("narrator: %w", err)
 	}
 
-	resolvedWebAddr := firstNonEmpty(*webAddr, yamlWebAddr)
+	resolvedWebAddr := firstNonEmpty(fl.webAddr, yamlWebAddr)
 	if resolvedWebAddr != "" && simProvider != nil {
 		stop, err := startWebUI(resolvedWebAddr, simProvider, attachOnSims, imageCache, stderr)
 		if err != nil {
@@ -259,7 +307,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		defer stop()
 	}
 
-	if err := startAutosave(ctx, st, w, firstNonEmpty(*saveMode, yamlSaveMode), stderr); err != nil {
+	if err := startAutosave(ctx, st, w, firstNonEmpty(fl.saveMode, yamlSaveMode), stderr); err != nil {
 		return err
 	}
 
@@ -267,7 +315,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		World:        w,
 		Store:        st,
 		Sim:          stepper,
-		TickInterval: *tickInterval,
+		TickInterval: fl.tickInterval,
 		Output:       stdout,
 	}); err != nil {
 		return fmt.Errorf("run tui: %w", err)
@@ -1171,53 +1219,59 @@ func storeWorldLoader(st tui.Storer) sim.WorldLoader {
 // cmdReplay opens a stored world's event log and walks it tick by
 // tick. The TUI watches a passive Stepper that applies one event
 // per tick interval; no brain is consulted.
-func cmdReplay(args []string, stdout, stderr io.Writer) error {
-	fs := flag.NewFlagSet("fiatlux replay", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	dbPath := fs.String("db", "", "database DSN (required; accepts local files and libsql URLs)")
-	worldName := fs.String("world", "kosmos", "name of the world to replay")
-	replayTick := fs.Duration("replay-tick", 100*time.Millisecond, "delay between replayed events")
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
+func cmdReplay(stdout, stderr io.Writer) *cobra.Command {
+	_ = stderr
+	cmd := &cobra.Command{
+		Use:          "replay",
+		Short:        "Replay a saved world tick by tick",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
 	}
-	if *dbPath == "" {
-		return errors.New("replay: --db is required")
-	}
+	f := cmd.Flags()
+	dbPath := f.String("db", "", "database DSN (required; accepts local files and libsql URLs)")
+	worldName := f.String("world", "kosmos", "name of the world to replay")
+	replayTick := f.Duration("replay-tick", 100*time.Millisecond, "delay between replayed events")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if *dbPath == "" {
+			return errors.New("replay: --db is required")
+		}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
 
-	st, err := store.Open(ctx, *dbPath)
-	if err != nil {
-		return fmt.Errorf("open store: %w", err)
-	}
-	defer func() { _ = st.Close() }()
+		st, err := store.Open(ctx, *dbPath)
+		if err != nil {
+			return fmt.Errorf("open store: %w", err)
+		}
+		defer func() { _ = st.Close() }()
 
-	loaded, err := st.Load(ctx, *worldName)
-	if err != nil {
-		return fmt.Errorf("load world: %w", err)
-	}
-	events := loaded.Events()
-	if len(events) == 0 {
-		_, _ = fmt.Fprintln(stdout, "(world has no events to replay)")
+		loaded, err := st.Load(ctx, *worldName)
+		if err != nil {
+			return fmt.Errorf("load world: %w", err)
+		}
+		events := loaded.Events()
+		if len(events) == 0 {
+			_, _ = fmt.Fprintln(stdout, "(world has no events to replay)")
+			return nil
+		}
+
+		rp, err := sim.NewReplay(*worldName, events)
+		if err != nil {
+			return fmt.Errorf("new replay: %w", err)
+		}
+		stepper := replayAdapter{r: rp}
+
+		if err := tui.Run(ctx, tui.RunOptions{
+			World:        rp.World,
+			Sim:          stepper,
+			TickInterval: *replayTick,
+			Output:       stdout,
+		}); err != nil {
+			return fmt.Errorf("run tui: %w", err)
+		}
 		return nil
 	}
-
-	rp, err := sim.NewReplay(*worldName, events)
-	if err != nil {
-		return fmt.Errorf("new replay: %w", err)
-	}
-	stepper := replayAdapter{r: rp}
-
-	if err := tui.Run(ctx, tui.RunOptions{
-		World:        rp.World,
-		Sim:          stepper,
-		TickInterval: *replayTick,
-		Output:       stdout,
-	}); err != nil {
-		return fmt.Errorf("run tui: %w", err)
-	}
-	return nil
+	return cmd
 }
 
 // stepSummary is the headless-mode output document.
@@ -1400,46 +1454,72 @@ func finalSave(st tui.Storer, w *world.World, stderr io.Writer) {
 	}
 }
 
-func cmdStep(args []string, stdout, stderr io.Writer) error {
-	fs := flag.NewFlagSet("fiatlux step", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	count := fs.Int("count", 1, "number of Step calls to perform")
-	worldName := fs.String("world", "kosmos", "name of the world to open or create")
-	dbPath := fs.String("db", "", "database DSN (empty = in-memory)")
-	brainSpec := fs.String("brain", "stub", "brain config; see 'fiatlux help'")
-	tickDelay := fs.Duration("tick", 0, "delay between steps (default: no delay)")
-	embedderSpec := fs.String("embedder", "zero", "memory embedder")
-	importanceSpec := fs.String("importance", "heuristic", "memory importance scorer")
-	reflectInterval := fs.Uint64("reflect-interval", 0, "ticks between reflection passes (0 = disable)")
-	maxAgents := fs.Int("max-agents", 8, "cap on total agents per world")
-	maxSpawnDepth := fs.Int("max-spawn-depth", 3, "cap on the spawn graph height")
-	jsonOut := fs.Bool("json", false, "emit summary as JSON instead of human-readable text")
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
+func cmdStep(stdout, stderr io.Writer) *cobra.Command {
+	_ = stderr
+	cmd := &cobra.Command{
+		Use:          "step",
+		Short:        "Run the sim headlessly for N steps and print a summary",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
 	}
-	if *count <= 0 {
-		return fmt.Errorf("step: --count must be > 0 (got %d)", *count)
+	f := cmd.Flags()
+	count := f.Int("count", 1, "number of Step calls to perform")
+	worldName := f.String("world", "kosmos", "name of the world to open or create")
+	dbPath := f.String("db", "", "database DSN (empty = in-memory)")
+	brainSpec := f.String("brain", "stub", "brain config; see 'fiatlux help'")
+	tickDelay := f.Duration("tick", 0, "delay between steps (default: no delay)")
+	embedderSpec := f.String("embedder", "zero", "memory embedder")
+	importanceSpec := f.String("importance", "heuristic", "memory importance scorer")
+	reflectInterval := f.Uint64("reflect-interval", 0, "ticks between reflection passes (0 = disable)")
+	maxAgents := f.Int("max-agents", 8, "cap on total agents per world")
+	maxSpawnDepth := f.Int("max-spawn-depth", 3, "cap on the spawn graph height")
+	jsonOut := f.Bool("json", false, "emit summary as JSON instead of human-readable text")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		return runStep(stdout, stepFlags{
+			count: *count, worldName: *worldName, dbPath: *dbPath, brainSpec: *brainSpec,
+			tickDelay: *tickDelay, embedderSpec: *embedderSpec, importanceSpec: *importanceSpec,
+			reflectInterval: *reflectInterval, maxAgents: *maxAgents, maxSpawnDepth: *maxSpawnDepth,
+			jsonOut: *jsonOut,
+		})
+	}
+	return cmd
+}
+
+// stepFlags holds the resolved flags for the step command.
+type stepFlags struct {
+	count                        int
+	worldName, dbPath, brainSpec string
+	tickDelay                    time.Duration
+	embedderSpec, importanceSpec string
+	reflectInterval              uint64
+	maxAgents, maxSpawnDepth     int
+	jsonOut                      bool
+}
+
+func runStep(stdout io.Writer, fl stepFlags) error {
+	if fl.count <= 0 {
+		return fmt.Errorf("step: --count must be > 0 (got %d)", fl.count)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	st, closeStore, err := openStore(ctx, *dbPath)
+	st, closeStore, err := openStore(ctx, fl.dbPath)
 	if err != nil {
 		return err
 	}
 	defer closeStore()
 
-	w, err := loadOrNewWorld(ctx, st, *worldName)
+	w, err := loadOrNewWorld(ctx, st, fl.worldName)
 	if err != nil {
 		return err
 	}
 
-	embedder, err := buildEmbedder(*embedderSpec)
+	embedder, err := buildEmbedder(fl.embedderSpec)
 	if err != nil {
 		return fmt.Errorf("build embedder: %w", err)
 	}
-	s, err := buildSim(w, *brainSpec, embedder, *importanceSpec, *reflectInterval, *maxAgents, *maxSpawnDepth)
+	s, err := buildSim(w, fl.brainSpec, embedder, fl.importanceSpec, fl.reflectInterval, fl.maxAgents, fl.maxSpawnDepth)
 	if err != nil {
 		return fmt.Errorf("build sim: %w", err)
 	}
@@ -1453,7 +1533,7 @@ func cmdStep(args []string, stdout, stderr io.Writer) error {
 		st = &fullSaver{store: dbStore, simForWorld: simByName([]*sim.Sim{s})}
 	}
 
-	summary, err := runSteps(ctx, s, *count, *tickDelay)
+	summary, err := runSteps(ctx, s, fl.count, fl.tickDelay)
 	if err != nil {
 		return err
 	}
@@ -1472,7 +1552,7 @@ func cmdStep(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 
-	if *jsonOut {
+	if fl.jsonOut {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(summary); err != nil {
@@ -1494,82 +1574,86 @@ type stepper interface {
 // cmdServe runs the sim headlessly with the embedded web viewer
 // attached. No TUI, no /dev/tty - this is the deployment-friendly
 // entrypoint that fits in a container behind a Cloudflare Tunnel.
-func cmdServe(args []string, stdout, stderr io.Writer) error {
-	fs := flag.NewFlagSet("fiatlux serve", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	worldName := fs.String("world", "kosmos", "name of the world to open or create")
-	dbPath := fs.String("db", "", "database DSN (empty = in-memory, no persistence)")
-	brainSpec := fs.String("brain", "stub", "brain config; see 'fiatlux help'")
-	tickInterval := fs.Duration("tick", tui.DefaultTickInterval, "sim tick interval")
-	embedderSpec := fs.String("embedder", "zero", "memory embedder (zero | hash | ollama[:model] | openai[:model])")
-	importanceSpec := fs.String("importance", "heuristic", "memory importance scorer (heuristic | llm)")
-	reflectInterval := fs.Uint64("reflect-interval", 20, "ticks between reflection passes (0 = disable)")
-	maxAgents := fs.Int("max-agents", 8, "cap on total agents per world")
-	maxSpawnDepth := fs.Int("max-spawn-depth", 3, "cap on the spawn graph height")
-	configPath := fs.String("config", "", "YAML config for a multi-world universe (overrides --brain)")
-	webAddr := fs.String("web-addr", ":8080", "address to bind the embedded web viewer (e.g. :8080 or 127.0.0.1:8080)")
-	saveMode := fs.String("save-mode", "", "persistence cadence: manual | interval:<duration> (e.g. interval:30s)")
+func cmdServe(stdout, stderr io.Writer) *cobra.Command {
 	_ = stdout
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
+	cmd := &cobra.Command{
+		Use:          "serve",
+		Short:        "Run the sim headlessly with the embedded web viewer attached",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
 	}
+	f := cmd.Flags()
+	worldName := f.String("world", "kosmos", "name of the world to open or create")
+	dbPath := f.String("db", "", "database DSN (empty = in-memory, no persistence)")
+	brainSpec := f.String("brain", "stub", "brain config; see 'fiatlux help'")
+	tickInterval := f.Duration("tick", tui.DefaultTickInterval, "sim tick interval")
+	embedderSpec := f.String("embedder", "zero", "memory embedder (zero | hash | ollama[:model] | openai[:model])")
+	importanceSpec := f.String("importance", "heuristic", "memory importance scorer (heuristic | llm)")
+	reflectInterval := f.Uint64("reflect-interval", 20, "ticks between reflection passes (0 = disable)")
+	maxAgents := f.Int("max-agents", 8, "cap on total agents per world")
+	maxSpawnDepth := f.Int("max-spawn-depth", 3, "cap on the spawn graph height")
+	configPath := f.String("config", "", "YAML config for a multi-world universe (overrides --brain)")
+	webAddr := f.String("web-addr", ":8080", "address to bind the embedded web viewer (e.g. :8080 or 127.0.0.1:8080)")
+	saveMode := f.String("save-mode", "", "persistence cadence: manual | interval:<duration> (e.g. interval:30s)")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+		st, closeStore, err := openStore(ctx, *dbPath)
+		if err != nil {
+			return err
+		}
+		defer closeStore()
 
-	st, closeStore, err := openStore(ctx, *dbPath)
-	if err != nil {
-		return err
-	}
-	defer closeStore()
+		w, err := loadOrNewWorld(ctx, st, *worldName)
+		if err != nil {
+			return err
+		}
 
-	w, err := loadOrNewWorld(ctx, st, *worldName)
-	if err != nil {
-		return err
-	}
+		sc, err := buildServeComponents(ctx, w, st, runComponentOpts{
+			embedderSpec:  *embedderSpec,
+			configPath:    *configPath,
+			brainSpec:     *brainSpec,
+			importance:    *importanceSpec,
+			reflect:       *reflectInterval,
+			maxAgents:     *maxAgents,
+			maxSpawnDepth: *maxSpawnDepth,
+		})
+		if err != nil {
+			return err
+		}
+		defer sc.cleanup()
+		w = sc.world
 
-	sc, err := buildServeComponents(ctx, w, st, runComponentOpts{
-		embedderSpec:  *embedderSpec,
-		configPath:    *configPath,
-		brainSpec:     *brainSpec,
-		importance:    *importanceSpec,
-		reflect:       *reflectInterval,
-		maxAgents:     *maxAgents,
-		maxSpawnDepth: *maxSpawnDepth,
-	})
-	if err != nil {
-		return err
-	}
-	defer sc.cleanup()
-	w = sc.world
+		if dbStore, ok := st.(*store.Store); ok && sc.simForWorld != nil {
+			st = &fullSaver{store: dbStore, simForWorld: sc.simForWorld}
+		}
 
-	if dbStore, ok := st.(*store.Store); ok && sc.simForWorld != nil {
-		st = &fullSaver{store: dbStore, simForWorld: sc.simForWorld}
-	}
+		resolvedWebAddr := *webAddr
+		if resolvedWebAddr == "" {
+			resolvedWebAddr = sc.yamlWebAddr
+		}
+		if resolvedWebAddr == "" {
+			return errors.New("serve: --web-addr is required (set the flag or YAML 'web.addr')")
+		}
+		stop, err := startWebUI(resolvedWebAddr, sc.simProvider, sc.attachOnSims, nil, stderr)
+		if err != nil {
+			return err
+		}
+		defer stop()
 
-	resolvedWebAddr := *webAddr
-	if resolvedWebAddr == "" {
-		resolvedWebAddr = sc.yamlWebAddr
-	}
-	if resolvedWebAddr == "" {
-		return errors.New("serve: --web-addr is required (set the flag or YAML 'web.addr')")
-	}
-	stop, err := startWebUI(resolvedWebAddr, sc.simProvider, sc.attachOnSims, nil, stderr)
-	if err != nil {
-		return err
-	}
-	defer stop()
+		resolvedSaveMode := *saveMode
+		if resolvedSaveMode == "" {
+			resolvedSaveMode = sc.yamlSaveMode
+		}
+		if err := startAutosave(ctx, st, w, resolvedSaveMode, stderr); err != nil {
+			return err
+		}
 
-	resolvedSaveMode := *saveMode
-	if resolvedSaveMode == "" {
-		resolvedSaveMode = sc.yamlSaveMode
+		serveLoop(ctx, sc.loop, st, w, *tickInterval, stderr)
+		return nil
 	}
-	if err := startAutosave(ctx, st, w, resolvedSaveMode, stderr); err != nil {
-		return err
-	}
-
-	serveLoop(ctx, sc.loop, st, w, *tickInterval, stderr)
-	return nil
+	return cmd
 }
 
 func writeHumanSummary(w io.Writer, s stepSummary) {
