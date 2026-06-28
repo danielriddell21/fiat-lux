@@ -67,7 +67,7 @@ func Create() Tool {
 			}
 			id, err := w.Create(agent, a.TypeLabel, world.Properties(a.Properties))
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("create entity: %w", err)
 			}
 			return fmt.Sprintf("created %s #%d", a.TypeLabel, id), nil
 		},
@@ -121,7 +121,7 @@ func Modify() Tool {
 				return "", fmt.Errorf("Modify: bad args: %w", err)
 			}
 			if err := w.Modify(agent, world.EntityID(a.EntityID), world.Properties(a.PropertiesPatch)); err != nil {
-				return "", err
+				return "", fmt.Errorf("modify entity: %w", err)
 			}
 			return fmt.Sprintf("modified #%d", a.EntityID), nil
 		},
@@ -168,7 +168,7 @@ func Destroy() Tool {
 				return "", fmt.Errorf("Destroy: bad args: %w", err)
 			}
 			if err := w.Destroy(agent, world.EntityID(a.EntityID)); err != nil {
-				return "", err
+				return "", fmt.Errorf("destroy entity: %w", err)
 			}
 			return fmt.Sprintf("destroyed #%d", a.EntityID), nil
 		},
@@ -216,7 +216,7 @@ func Relate() Tool {
 			}
 			id, err := w.Relate(agent, world.EntityID(a.From), world.EntityID(a.To), a.Kind)
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("relate entities: %w", err)
 			}
 			return fmt.Sprintf("relation #%d: #%d -[%s]-> #%d", id, a.From, a.Kind, a.To), nil
 		},
@@ -266,7 +266,7 @@ func Unrelate() Tool {
 				return "", fmt.Errorf("Unrelate: bad args: %w", err)
 			}
 			if err := w.Unrelate(agent, world.RelationshipID(a.RelID)); err != nil {
-				return "", err
+				return "", fmt.Errorf("unrelate: %w", err)
 			}
 			return fmt.Sprintf("unrelated #%d", a.RelID), nil
 		},
@@ -436,7 +436,7 @@ func SpawnAgent() Tool {
 			}
 			id, err := w.Create(agent, "agent", props)
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("spawn agent: %w", err)
 			}
 			return fmt.Sprintf("spawned agent #%d (entity only - sim attaches the brain)", id), nil
 		},
@@ -762,43 +762,47 @@ func FindByProperty() Tool {
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return "", fmt.Errorf("FindByProperty: bad args: %w", err)
 			}
-			if a.Key == "" {
-				return "", errors.New("FindByProperty: key must be non-empty")
-			}
-			hits := []findHit{}
-			for _, e := range w.Entities() {
-				got, ok := e.Properties[a.Key]
-				if !ok {
-					continue
-				}
-				if !propsEqual(got, a.Value) {
-					continue
-				}
-				hits = append(hits, findHit{ID: uint64(e.ID), Type: e.TypeLabel, Name: stringProp(e.Properties, "name")})
-			}
-			return encodeMatches(hits)
+			return findByProperty(w, a)
 		},
-		RandomArgs: func(rng *rand.Rand, p brain.Perception) (json.RawMessage, bool) {
-			// Pick a random alive entity and one of its properties as
-			// the target. Returns nil if no entity has any property.
-			for tries := 0; tries < 4 && len(p.AliveEntities) > 0; tries++ {
-				e := p.AliveEntities[rng.IntN(len(p.AliveEntities))]
-				if len(e.Properties) == 0 {
-					continue
-				}
-				keys := make([]string, 0, len(e.Properties))
-				for k := range e.Properties {
-					keys = append(keys, k)
-				}
-				k := keys[rng.IntN(len(keys))]
-				b, err := json.Marshal(findByPropertyArgs{Key: k, Value: e.Properties[k]})
-				if err == nil {
-					return b, true
-				}
-			}
-			return nil, false
-		},
+		RandomArgs: randomFindByPropertyArgs,
 	}
+}
+
+// findByProperty lists every live entity whose Properties[Key] equals Value.
+func findByProperty(w *world.World, a findByPropertyArgs) (string, error) {
+	if a.Key == "" {
+		return "", errors.New("FindByProperty: key must be non-empty")
+	}
+	hits := []findHit{}
+	for _, e := range w.Entities() {
+		got, ok := e.Properties[a.Key]
+		if !ok || !propsEqual(got, a.Value) {
+			continue
+		}
+		hits = append(hits, findHit{ID: uint64(e.ID), Type: e.TypeLabel, Name: stringProp(e.Properties, "name")})
+	}
+	return encodeMatches(hits)
+}
+
+// randomFindByPropertyArgs picks a random alive entity and one of its properties
+// as the match target, returning false when no entity has any property.
+func randomFindByPropertyArgs(rng *rand.Rand, p brain.Perception) (json.RawMessage, bool) {
+	for tries := 0; tries < 4 && len(p.AliveEntities) > 0; tries++ {
+		e := p.AliveEntities[rng.IntN(len(p.AliveEntities))]
+		if len(e.Properties) == 0 {
+			continue
+		}
+		keys := make([]string, 0, len(e.Properties))
+		for k := range e.Properties {
+			keys = append(keys, k)
+		}
+		k := keys[rng.IntN(len(keys))]
+		b, err := json.Marshal(findByPropertyArgs{Key: k, Value: e.Properties[k]})
+		if err == nil {
+			return b, true
+		}
+	}
+	return nil, false
 }
 
 // ---- FindRelated ------------------------------------------------------------
@@ -835,68 +839,85 @@ func FindRelated() Tool {
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return "", fmt.Errorf("FindRelated: bad args: %w", err)
 			}
-			if a.EntityID == 0 {
-				return "", errors.New("FindRelated: entity_id must be > 0")
-			}
-			target := world.EntityID(a.EntityID)
-			byID := make(map[world.EntityID]world.Entity)
-			for _, e := range w.Entities() {
-				byID[e.ID] = e
-			}
-			hits := []relatedHit{}
-			for _, r := range w.Relationships() {
-				var otherID world.EntityID
-				var direction string
-				switch {
-				case r.From == target:
-					otherID, direction = r.To, "outgoing"
-				case r.To == target:
-					otherID, direction = r.From, "incoming"
-				default:
-					continue
-				}
-				if a.Kind != "" && r.Kind != a.Kind {
-					continue
-				}
-				other, ok := byID[otherID]
-				if !ok {
-					continue
-				}
-				hits = append(hits, relatedHit{
-					ID:        uint64(other.ID),
-					Type:      other.TypeLabel,
-					Name:      stringProp(other.Properties, "name"),
-					Kind:      r.Kind,
-					Direction: direction,
-				})
-			}
-			out := struct {
-				Matches []relatedHit `json:"matches"`
-				Count   int          `json:"count"`
-			}{Matches: hits, Count: len(hits)}
-			b, err := json.Marshal(out)
-			if err != nil {
-				return "", fmt.Errorf("FindRelated: encode result: %w", err)
-			}
-			return string(b), nil
+			return findRelated(w, a)
 		},
-		RandomArgs: func(rng *rand.Rand, p brain.Perception) (json.RawMessage, bool) {
-			if len(p.AliveEntities) == 0 {
-				return nil, false
-			}
-			e := p.AliveEntities[rng.IntN(len(p.AliveEntities))]
-			args := findRelatedArgs{EntityID: e.ID}
-			// Half the time, also filter by a random observed relation kind.
-			if len(p.AliveRelationships) > 0 && rng.IntN(2) == 0 {
-				args.Kind = p.AliveRelationships[rng.IntN(len(p.AliveRelationships))].Kind
-			}
-			b, err := json.Marshal(args)
-			if err != nil {
-				return nil, false
-			}
-			return b, true
-		},
+		RandomArgs: randomFindRelatedArgs,
 	}
+}
+
+// findRelated lists every live entity related to a.EntityID, optionally filtered
+// by relationship kind.
+func findRelated(w *world.World, a findRelatedArgs) (string, error) {
+	if a.EntityID == 0 {
+		return "", errors.New("FindRelated: entity_id must be > 0")
+	}
+	target := world.EntityID(a.EntityID)
+	byID := make(map[world.EntityID]world.Entity)
+	for _, e := range w.Entities() {
+		byID[e.ID] = e
+	}
+	hits := []relatedHit{}
+	for _, r := range w.Relationships() {
+		if hit, ok := relatedHitFor(r, target, a.Kind, byID); ok {
+			hits = append(hits, hit)
+		}
+	}
+	out := struct {
+		Matches []relatedHit `json:"matches"`
+		Count   int          `json:"count"`
+	}{Matches: hits, Count: len(hits)}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return "", fmt.Errorf("FindRelated: encode result: %w", err)
+	}
+	return string(b), nil
+}
+
+// relatedHitFor builds the hit for relationship r as seen from target, or false
+// when r does not involve target, fails the kind filter, or the other end is gone.
+func relatedHitFor(r world.Relationship, target world.EntityID, kind string, byID map[world.EntityID]world.Entity) (relatedHit, bool) {
+	var otherID world.EntityID
+	var direction string
+	switch {
+	case r.From == target:
+		otherID, direction = r.To, "outgoing"
+	case r.To == target:
+		otherID, direction = r.From, "incoming"
+	default:
+		return relatedHit{}, false
+	}
+	if kind != "" && r.Kind != kind {
+		return relatedHit{}, false
+	}
+	other, ok := byID[otherID]
+	if !ok {
+		return relatedHit{}, false
+	}
+	return relatedHit{
+		ID:        uint64(other.ID),
+		Type:      other.TypeLabel,
+		Name:      stringProp(other.Properties, "name"),
+		Kind:      r.Kind,
+		Direction: direction,
+	}, true
+}
+
+// randomFindRelatedArgs picks a random alive entity (half the time filtered by a
+// random observed relation kind), returning false when there are no entities.
+func randomFindRelatedArgs(rng *rand.Rand, p brain.Perception) (json.RawMessage, bool) {
+	if len(p.AliveEntities) == 0 {
+		return nil, false
+	}
+	e := p.AliveEntities[rng.IntN(len(p.AliveEntities))]
+	args := findRelatedArgs{EntityID: e.ID}
+	if len(p.AliveRelationships) > 0 && rng.IntN(2) == 0 {
+		args.Kind = p.AliveRelationships[rng.IntN(len(p.AliveRelationships))].Kind
+	}
+	b, err := json.Marshal(args)
+	if err != nil {
+		return nil, false
+	}
+	return b, true
 }
 
 // encodeMatches packages a list of findHits into the standard JSON
@@ -908,7 +929,7 @@ func encodeMatches(hits []findHit) (string, error) {
 	}{Matches: hits, Count: len(hits)}
 	b, err := json.Marshal(out)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("marshal matches: %w", err)
 	}
 	return string(b), nil
 }

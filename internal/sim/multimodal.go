@@ -37,61 +37,63 @@ func (s *Sim) maybeGenerateImage(by world.EntityID, sinceEvent world.EventID) {
 		pb = imagegen.DefaultPromptBuilder
 	}
 
-	// Find the most recent matching EventCreate.
-	events := s.World.Events()
-	var target *world.Event
-	for i := len(events) - 1; i >= 0; i-- {
-		ev := events[i]
-		if ev.ID <= sinceEvent {
-			break
-		}
-		if ev.Kind != world.EventCreate {
-			continue
-		}
-		if ev.Agent != by {
-			continue
-		}
-		target = &events[i]
-		break
-	}
-	if target == nil {
-		return
-	}
-	if len(target.Props) < minProps {
+	target := findRecentCreate(s.World.Events(), by, sinceEvent)
+	if target == nil || len(target.Props) < minProps {
 		return
 	}
 
 	prompt := pb(target.TypeLabel, target.Props)
 	entityID := target.EntityID
-	cache := mm.Cache
-	gen := mm.Generator
+	url := urlBase + imagegen.Hash(prompt) + ".png"
 
 	s.imageWG.Add(1)
 	go func() {
 		defer s.imageWG.Done()
-		// Cache hit: skip the API call.
-		if cache != nil {
-			if _, err := cache.Get(prompt); err == nil {
-				s.attachImageURL(entityID, urlBase+imagegen.Hash(prompt)+".png")
-				return
-			} else if !errors.Is(err, os.ErrNotExist) {
-				// Permissions error or similar; treat as cache miss.
-				_ = err
-			}
+		if s.renderImage(mm.Cache, mm.Generator, prompt) {
+			s.attachImageURL(entityID, url)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		defer cancel()
-		data, _, err := gen.Generate(ctx, prompt)
-		if err != nil || len(data) == 0 {
-			return
-		}
-		if cache != nil {
-			if err := cache.Put(prompt, data); err != nil {
-				return
-			}
-		}
-		s.attachImageURL(entityID, urlBase+imagegen.Hash(prompt)+".png")
 	}()
+}
+
+// findRecentCreate returns the most recent EventCreate authored by the
+// given agent with an ID past sinceEvent, or nil if there is none.
+func findRecentCreate(events []world.Event, by world.EntityID, sinceEvent world.EventID) *world.Event {
+	for i := len(events) - 1; i >= 0; i-- {
+		ev := events[i]
+		if ev.ID <= sinceEvent {
+			return nil
+		}
+		if ev.Kind == world.EventCreate && ev.Agent == by {
+			return &events[i]
+		}
+	}
+	return nil
+}
+
+// renderImage resolves the image bytes for prompt, returning true when
+// a URL should be attached. A cache hit short-circuits the API call; a
+// cache miss generates and (best-effort) caches the result.
+func (s *Sim) renderImage(cache *imagegen.Cache, gen imagegen.Generator, prompt string) bool {
+	if cache != nil {
+		if _, err := cache.Get(prompt); err == nil {
+			return true
+		} else if !errors.Is(err, os.ErrNotExist) {
+			// Permissions error or similar; treat as cache miss.
+			_ = err
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	data, _, err := gen.Generate(ctx, prompt)
+	if err != nil || len(data) == 0 {
+		return false
+	}
+	if cache != nil {
+		if err := cache.Put(prompt, data); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // attachImageURL patches the entity's properties with the image URL.

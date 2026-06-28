@@ -98,7 +98,8 @@ func (s *Server) Publish(res sim.StepResult) {
 // Start opens the listener and serves in the current goroutine.
 // Returns http.ErrServerClosed on a clean shutdown.
 func (s *Server) Start() error {
-	ln, err := net.Listen("tcp", s.addr)
+	lc := net.ListenConfig{}
+	ln, err := lc.Listen(context.Background(), "tcp", s.addr)
 	if err != nil {
 		return fmt.Errorf("webui: listen %s: %w", s.addr, err)
 	}
@@ -107,7 +108,10 @@ func (s *Server) Start() error {
 	if !s.isLocalOnly() {
 		s.logf("WARNING: web UI bound to a non-loopback address; anyone on the network can view this kosmos")
 	}
-	return s.srv.Serve(ln)
+	if err := s.srv.Serve(ln); err != nil {
+		return fmt.Errorf("webui: serve: %w", err)
+	}
+	return nil
 }
 
 // Shutdown gracefully closes the server.
@@ -116,7 +120,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	s.broker.closeAll()
-	return s.srv.Shutdown(ctx)
+	if err := s.srv.Shutdown(ctx); err != nil {
+		return fmt.Errorf("webui: shutdown: %w", err)
+	}
+	return nil
 }
 
 // Addr returns the resolved listen address; useful after Start

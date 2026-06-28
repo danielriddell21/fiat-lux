@@ -162,7 +162,10 @@ func (n *Narrator) Close() error {
 	if n == nil || n.brain == nil {
 		return nil
 	}
-	return n.brain.Close()
+	if err := n.brain.Close(); err != nil {
+		return fmt.Errorf("close brain: %w", err)
+	}
+	return nil
 }
 
 // buildPerception flattens the world into the brain's Perception

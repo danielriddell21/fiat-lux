@@ -1,57 +1,71 @@
 version: "2"
 
-run:
-  timeout: 5m
-  tests: true
-
 linters:
-  default: none
+  default: standard
   enable:
-    - errcheck
-    - govet
-    - staticcheck
-    - revive
-    - ineffassign
-    - unused
+    - dupl
+    - cyclop
+    - errorlint
+    - gocognit
+    - gocritic
+    - gosec
+    - misspell
+    - nilerr
+    - noctx
+    - prealloc
+    - thelper
+    - unconvert
+    - unparam
+    - whitespace
+    - wrapcheck
   settings:
-    revive:
-      severity: warning
-      rules:
-        - name: blank-imports
-        - name: context-as-argument
-        - name: context-keys-type
-        - name: error-return
-        - name: error-strings
-        - name: error-naming
-        - name: exported
-        - name: increment-decrement
-        - name: var-naming
-        - name: var-declaration
-        - name: package-comments
-        - name: range
-        - name: receiver-naming
-        - name: time-naming
-        - name: unexported-return
-        - name: indent-error-flow
-        - name: errorf
-        - name: empty-block
-        - name: superfluous-else
-        - name: unused-parameter
-          disabled: true
-        - name: unreachable-code
-        - name: redefines-builtin-id
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+        - shadow
+    cyclop:
+      max-complexity: 15
+    gocognit:
+      min-complexity: 20
+    errcheck:
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    gosec:
+      excludes:
+        - G107
+        - G115
+        - G204
+        - G304
+        - G404
+        - G602
+        - G703
   exclusions:
+    paths:
+      - examples
     rules:
-      - path: _test\.go
+      - path: "_test\\.go"
         linters:
+          - wrapcheck
+          - gosec
+          - unparam
+          - gocognit
+          - cyclop
+          - prealloc
           - errcheck
-          - revive
+          - gocritic
+          - noctx
 
 formatters:
   enable:
-    - gofmt
+    - gofumpt
     - goimports
-
-issues:
-  max-issues-per-linter: 0
-  max-same-issues: 0
+  exclusions:
+    paths:
+      - examples
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/danielriddell21/fiat-lux

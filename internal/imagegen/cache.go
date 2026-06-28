@@ -40,7 +40,7 @@ func (c *Cache) Get(prompt string) ([]byte, error) {
 	path := c.path(prompt)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("imagegen: read %s: %w", path, err)
 	}
 	return data, nil
 }
@@ -54,7 +54,11 @@ func (c *Cache) GetByHash(hash string) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	path := filepath.Join(c.dir, hash+".bin")
-	return os.ReadFile(path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("imagegen: read %s: %w", path, err)
+	}
+	return data, nil
 }
 
 // Put stores the bytes under the prompt's hash. Calls to Get with
@@ -62,11 +66,11 @@ func (c *Cache) GetByHash(hash string) ([]byte, error) {
 func (c *Cache) Put(prompt string, data []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := os.MkdirAll(c.dir, 0o755); err != nil {
+	if err := os.MkdirAll(c.dir, 0o750); err != nil {
 		return fmt.Errorf("imagegen: mkdir %s: %w", c.dir, err)
 	}
 	path := c.path(prompt)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("imagegen: write %s: %w", path, err)
 	}
 	return nil

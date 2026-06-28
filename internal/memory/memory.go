@@ -214,52 +214,70 @@ func (s *Stream) Retrieve(ctx context.Context, query string, tick world.Tick, k 
 	if k <= 0 {
 		return nil, nil
 	}
-	s.mu.RLock()
-	if len(s.records) == 0 {
-		s.mu.RUnlock()
+	records, weights, halfLife, ok := s.snapshot()
+	if !ok {
 		return nil, nil
 	}
-	weights := s.weights
-	halfLife := s.halfLife
-	records := make([]Record, len(s.records))
-	copy(records, s.records)
-	s.mu.RUnlock()
 
-	var queryVec []float64
-	if embedder != nil && query != "" {
-		v, err := embedder.Embed(ctx, query)
-		if err != nil {
-			return nil, fmt.Errorf("memory: embed query: %w", err)
-		}
-		queryVec = v
+	queryVec, err := embedQuery(ctx, query, embedder)
+	if err != nil {
+		return nil, err
 	}
 
+	ranked := rankRecords(records, queryVec, tick, weights, halfLife)
+
+	limit := k
+	if limit > len(ranked) {
+		limit = len(ranked)
+	}
+	out := make([]Record, limit)
+	idsTouched := make([]RecordID, limit)
+	for i := 0; i < limit; i++ {
+		out[i] = ranked[i]
+		idsTouched[i] = ranked[i].ID
+	}
+
+	s.bumpAccess(idsTouched, tick)
+	return out, nil
+}
+
+// snapshot copies the stream's records and scoring parameters under
+// the read lock. ok is false when the stream is empty.
+func (s *Stream) snapshot() (records []Record, weights ScoreWeights, halfLife float64, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.records) == 0 {
+		return nil, ScoreWeights{}, 0, false
+	}
+	records = make([]Record, len(s.records))
+	copy(records, s.records)
+	return records, s.weights, s.halfLife, true
+}
+
+// embedQuery hashes the query into a vector for relevance scoring.
+// Returns a nil vector (and no error) when the embedder is nil or the
+// query is empty.
+func embedQuery(ctx context.Context, query string, embedder Embedder) ([]float64, error) {
+	if embedder == nil || query == "" {
+		return nil, nil
+	}
+	v, err := embedder.Embed(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("memory: embed query: %w", err)
+	}
+	return v, nil
+}
+
+// rankRecords scores every record by recency * importance * relevance
+// and returns them sorted best-first, with deterministic tie-breaks.
+func rankRecords(records []Record, queryVec []float64, tick world.Tick, weights ScoreWeights, halfLife float64) []Record {
 	type scored struct {
 		r     Record
 		score float64
 	}
 	xs := make([]scored, len(records))
 	for i, r := range records {
-		// Recency uses "since most recent contact" - either last
-		// access or creation - so a memory retrieved again resets
-		// its recency. Follows Smallville here.
-		anchor := r.CreatedAt
-		if r.LastAccessTick > anchor {
-			anchor = r.LastAccessTick
-		}
-		rec := recencyScore(tick, anchor, halfLife)
-		imp := r.Importance / 10.0
-		var rel float64
-		if len(queryVec) > 0 && len(r.Embedding) > 0 {
-			rel = cosine(queryVec, r.Embedding)
-			if rel < 0 {
-				rel = 0
-			}
-		}
-		xs[i] = scored{
-			r:     r,
-			score: rec*weights.Recency + imp*weights.Importance + rel*weights.Relevance,
-		}
+		xs[i] = scored{r: r, score: recordScore(r, queryVec, tick, weights, halfLife)}
 	}
 	sort.Slice(xs, func(i, j int) bool {
 		if xs[i].score != xs[j].score {
@@ -272,21 +290,39 @@ func (s *Stream) Retrieve(ctx context.Context, query string, tick world.Tick, k 
 		}
 		return xs[i].r.ID > xs[j].r.ID
 	})
-
-	limit := k
-	if limit > len(xs) {
-		limit = len(xs)
-	}
-	out := make([]Record, limit)
-	idsTouched := make([]RecordID, limit)
-	for i := 0; i < limit; i++ {
+	out := make([]Record, len(xs))
+	for i := range xs {
 		out[i] = xs[i].r
-		idsTouched[i] = xs[i].r.ID
 	}
+	return out
+}
 
-	// Bump LastAccessTick for the touched records.
+// recordScore computes one record's combined retrieval score.
+func recordScore(r Record, queryVec []float64, tick world.Tick, weights ScoreWeights, halfLife float64) float64 {
+	// Recency uses "since most recent contact" - either last access or
+	// creation - so a memory retrieved again resets its recency.
+	// Follows Smallville here.
+	anchor := r.CreatedAt
+	if r.LastAccessTick > anchor {
+		anchor = r.LastAccessTick
+	}
+	rec := recencyScore(tick, anchor, halfLife)
+	imp := r.Importance / 10.0
+	var rel float64
+	if len(queryVec) > 0 && len(r.Embedding) > 0 {
+		rel = cosine(queryVec, r.Embedding)
+		if rel < 0 {
+			rel = 0
+		}
+	}
+	return rec*weights.Recency + imp*weights.Importance + rel*weights.Relevance
+}
+
+// bumpAccess resets LastAccessTick to tick for the given records.
+func (s *Stream) bumpAccess(ids []RecordID, tick world.Tick) {
 	s.mu.Lock()
-	for _, id := range idsTouched {
+	defer s.mu.Unlock()
+	for _, id := range ids {
 		for j := range s.records {
 			if s.records[j].ID == id {
 				if tick > s.records[j].LastAccessTick {
@@ -296,8 +332,6 @@ func (s *Stream) Retrieve(ctx context.Context, query string, tick world.Tick, k 
 			}
 		}
 	}
-	s.mu.Unlock()
-	return out, nil
 }
 
 // PerceptionViews converts Records to brain.MemoryViews for

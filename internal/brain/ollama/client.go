@@ -1,6 +1,7 @@
 package ollama
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/danielriddell21/fiat-lux/internal/brain/openai"
@@ -36,7 +37,7 @@ func New(opts Options) (*openai.Brain, error) {
 	if model == "" {
 		model = DefaultModel
 	}
-	return openai.New(openai.Options{
+	b, err := openai.New(openai.Options{
 		BaseURL:      baseURL,
 		APIKey:       "", // Ollama ignores the auth header
 		Model:        model,
@@ -44,4 +45,8 @@ func New(opts Options) (*openai.Brain, error) {
 		HTTPClient:   opts.HTTPClient,
 		Provider:     "ollama",
 	})
+	if err != nil {
+		return nil, fmt.Errorf("ollama: %w", err)
+	}
+	return b, nil
 }

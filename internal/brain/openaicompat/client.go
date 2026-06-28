@@ -7,6 +7,7 @@ package openaicompat
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/danielriddell21/fiat-lux/internal/brain/openai"
@@ -32,7 +33,7 @@ func New(opts Options) (*openai.Brain, error) {
 	if opts.Model == "" {
 		return nil, errors.New("openaicompat: Model is required")
 	}
-	return openai.New(openai.Options{
+	b, err := openai.New(openai.Options{
 		BaseURL:      opts.BaseURL,
 		APIKey:       opts.APIKey,
 		Model:        opts.Model,
@@ -40,4 +41,8 @@ func New(opts Options) (*openai.Brain, error) {
 		HTTPClient:   opts.HTTPClient,
 		Provider:     "openaicompat",
 	})
+	if err != nil {
+		return nil, fmt.Errorf("openaicompat: %w", err)
+	}
+	return b, nil
 }

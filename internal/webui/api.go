@@ -174,7 +174,7 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	_, _ = w.Write(data)
+	_, _ = w.Write(data) //nolint:gosec // cached PNG bytes served with an image/png content-type, not HTML
 }
 
 func errString(err error) string {

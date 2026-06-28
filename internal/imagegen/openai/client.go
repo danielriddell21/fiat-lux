@@ -95,11 +95,11 @@ type response struct {
 func (c *Client) Generate(ctx context.Context, prompt string) ([]byte, string, error) {
 	body, err := json.Marshal(request{Model: c.model, Prompt: prompt, N: 1, Size: c.size})
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("openai imagegen: marshal request: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/images/generations", bytes.NewReader(body))
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("openai imagegen: build request: %w", err)
 	}
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
@@ -113,7 +113,7 @@ func (c *Client) Generate(ctx context.Context, prompt string) ([]byte, string, e
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("openai imagegen: read response: %w", err)
 	}
 	if resp.StatusCode/100 != 2 {
 		var r response

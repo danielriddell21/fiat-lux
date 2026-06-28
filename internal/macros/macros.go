@@ -91,22 +91,29 @@ func (m Macro) Validate(existingTools map[string]struct{}) error {
 		}
 	}
 	for i, s := range m.Steps {
-		if s.Tool == "" {
-			return fmt.Errorf("macros: step %d has empty tool", i)
+		if err := validateStep(i, s, existingTools); err != nil {
+			return err
 		}
-		if slices.Contains(forbiddenSteps, s.Tool) {
-			return fmt.Errorf("macros: step %d uses forbidden tool %q", i, s.Tool)
+	}
+	return nil
+}
+
+// validateStep checks one macro step's tool name (non-empty, not reserved, and
+// known when existingTools is set) and that any args are valid JSON.
+func validateStep(i int, s Step, existingTools map[string]struct{}) error {
+	if s.Tool == "" {
+		return fmt.Errorf("macros: step %d has empty tool", i)
+	}
+	if slices.Contains(forbiddenSteps, s.Tool) {
+		return fmt.Errorf("macros: step %d uses forbidden tool %q", i, s.Tool)
+	}
+	if existingTools != nil {
+		if _, ok := existingTools[s.Tool]; !ok {
+			return fmt.Errorf("macros: step %d uses unknown tool %q", i, s.Tool)
 		}
-		if existingTools != nil {
-			if _, ok := existingTools[s.Tool]; !ok {
-				return fmt.Errorf("macros: step %d uses unknown tool %q", i, s.Tool)
-			}
-		}
-		if len(s.Args) > 0 {
-			if !json.Valid(s.Args) {
-				return fmt.Errorf("macros: step %d args are not valid JSON", i)
-			}
-		}
+	}
+	if len(s.Args) > 0 && !json.Valid(s.Args) {
+		return fmt.Errorf("macros: step %d args are not valid JSON", i)
 	}
 	return nil
 }

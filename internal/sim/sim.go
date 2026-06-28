@@ -560,23 +560,30 @@ func (s *Sim) stepAgent(ctx context.Context, ag *agent.Agent, rt *agentRuntime) 
 	ag.MarkSeen(s.World)
 	s.maybeWriteChapter(ctx)
 
-	if rt.reflector != nil && rt.reflector.ShouldReflect(tick) {
-		inserted, usage, err := rt.reflector.Reflect(ctx, ag.Memory, ag.EntityID, tick, ag.Embedder)
-		if err != nil && res.ToolErr == nil {
-			res.ToolErr = fmt.Errorf("reflection: %w", err)
-		}
-		if usage.Input != 0 || usage.Output != 0 || usage.Cached != 0 {
-			res.Usage.Input += usage.Input
-			res.Usage.Output += usage.Output
-			res.Usage.Cached += usage.Cached
-		}
-		for _, ins := range inserted {
-			res.Reflections = append(res.Reflections, ins.Content)
-		}
-	}
+	s.maybeReflect(ctx, ag, rt, tick, &res)
 
 	s.publish(res)
 	return res, nil
+}
+
+// maybeReflect runs the agent's reflector when it is due, folding any
+// new reflections and token usage into res.
+func (s *Sim) maybeReflect(ctx context.Context, ag *agent.Agent, rt *agentRuntime, tick world.Tick, res *StepResult) {
+	if rt.reflector == nil || !rt.reflector.ShouldReflect(tick) {
+		return
+	}
+	inserted, usage, err := rt.reflector.Reflect(ctx, ag.Memory, ag.EntityID, tick, ag.Embedder)
+	if err != nil && res.ToolErr == nil {
+		res.ToolErr = fmt.Errorf("reflection: %w", err)
+	}
+	if usage.Input != 0 || usage.Output != 0 || usage.Cached != 0 {
+		res.Usage.Input += usage.Input
+		res.Usage.Output += usage.Output
+		res.Usage.Cached += usage.Cached
+	}
+	for _, ins := range inserted {
+		res.Reflections = append(res.Reflections, ins.Content)
+	}
 }
 
 // invokeTool dispatches the agent's chosen tool. SpawnAgent, Speak,
@@ -603,12 +610,16 @@ func (s *Sim) invokeTool(ctx context.Context, ag *agent.Agent, call brain.ToolCa
 		if m, ok := rt.macros.Get(call.Name); ok {
 			expanded, err := m.Expand(call, rt.macros.AsRegistry(), 0)
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("expand macro %q: %w", call.Name, err)
 			}
 			return s.invokeExpanded(ctx, ag, m.Name, expanded, tick)
 		}
 	}
-	return ag.Tools.Invoke(call, s.World, ag.EntityID)
+	out, err := ag.Tools.Invoke(call, s.World, ag.EntityID)
+	if err != nil {
+		return "", fmt.Errorf("invoke tool %q: %w", call.Name, err)
+	}
+	return out, nil
 }
 
 // invokeExpanded runs an ordered list of primitive (or further
@@ -667,7 +678,7 @@ func (s *Sim) handleDefineTool(ag *agent.Agent, raw json.RawMessage) (string, er
 	}
 	known := primitiveToolNameSet(ag.Tools)
 	if err := rt.macros.Add(m, known); err != nil {
-		return "", err
+		return "", fmt.Errorf("register macro: %w", err)
 	}
 	persisted, err := json.Marshal(m)
 	if err != nil {

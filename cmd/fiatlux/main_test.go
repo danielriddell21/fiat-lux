@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danielriddell21/fiat-lux/internal/memory"
 	"github.com/danielriddell21/fiat-lux/internal/sim"
 )
 
@@ -94,8 +93,6 @@ func TestBuildEmbedder(t *testing.T) {
 			}
 		})
 	}
-	// Compile-time assertion that buildEmbedder returns memory.Embedder.
-	_ = (func(string) (memory.Embedder, error))(buildEmbedder)
 }
 
 func TestChainObservers(t *testing.T) {

@@ -78,8 +78,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		case "help", "-h", "--help":
 			return printHelp(stdout)
 		case "-version", "--version", "version":
-			_, err := fmt.Fprintln(stdout, version)
-			return err
+			_, _ = fmt.Fprintln(stdout, version)
+			return nil
 		}
 	}
 	return printBanner(args, stdout)
@@ -90,24 +90,20 @@ func printBanner(args []string, out io.Writer) error {
 	fs.SetOutput(out)
 	showVersion := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parse flags: %w", err)
 	}
 	if *showVersion {
-		_, err := fmt.Fprintln(out, version)
-		return err
+		_, _ = fmt.Fprintln(out, version)
+		return nil
 	}
-	if _, err := fmt.Fprint(out, banner); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(out, "\n  version: %s\n", version); err != nil {
-		return err
-	}
-	_, err := fmt.Fprintln(out, "  try 'fiatlux run' for the TUI, 'fiatlux serve' for the web viewer, or 'fiatlux help' for options.")
-	return err
+	_, _ = fmt.Fprint(out, banner)
+	_, _ = fmt.Fprintf(out, "\n  version: %s\n", version)
+	_, _ = fmt.Fprintln(out, "  try 'fiatlux run' for the TUI, 'fiatlux serve' for the web viewer, or 'fiatlux help' for options.")
+	return nil
 }
 
 func printHelp(out io.Writer) error {
-	_, err := fmt.Fprintln(out, `Usage:
+	_, _ = fmt.Fprintln(out, `Usage:
 
   fiatlux                       Print banner and version.
   fiatlux -version              Print version.
@@ -168,7 +164,7 @@ run flags:
                                             e.g. interval:30s
                       Also configurable via YAML 'save.mode'; the
                       flag wins when both set.`)
-	return err
+	return nil
 }
 
 func cmdRun(args []string, stdout, stderr io.Writer) error {
@@ -190,93 +186,46 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	imageCacheDir := fs.String("image-cache", "", "directory for generated images (default: $XDG_CACHE_HOME/fiatlux/images)")
 	narratorSpec := fs.String("narrator", "", "global narrator brain spec (overrides YAML); '' = use YAML, 'none' = disable")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parse flags: %w", err)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	var (
-		st     tui.Storer
-		closer io.Closer
-	)
-	if *dbPath != "" {
-		s, err := store.Open(ctx, *dbPath)
-		if err != nil {
-			return fmt.Errorf("open store: %w", err)
-		}
-		st = s
-		closer = s
+	st, closeStore, err := openStore(ctx, *dbPath)
+	if err != nil {
+		return err
 	}
-	if closer != nil {
-		defer func() { _ = closer.Close() }()
-	}
+	defer closeStore()
 
 	w, err := loadOrNewWorld(ctx, st, *worldName)
 	if err != nil {
 		return err
 	}
 
-	var (
-		stepper          tui.Stepper
-		simProvider      webui.SimProvider
-		yamlWebAddr      string
-		yamlSaveMode     string
-		yamlMultimodal   string
-		yamlImageCache   string
-		yamlMultimodalMM int
-		attachOnSims     []*sim.Sim // sims whose Observer the webui will subscribe to
-		simForWorld      func(name string) *sim.Sim
-	)
-	switch {
-	case *configPath != "":
-		embedder, err := buildEmbedder(*embedderSpec)
-		if err != nil {
-			return fmt.Errorf("build embedder: %w", err)
-		}
-		u, cfg, err := loadUniverse(ctx, *configPath, embedder, st)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = u.Close() }()
-		// Override the loaded world with the universe's focused
-		// world so save/load and the TUI agree.
-		w = u.Focused().World
-		stepper = newUniverseAdapter(u)
-		simProvider = func() *sim.Sim { return u.Focused() }
-		attachOnSims = u.Sims()
-		simForWorld = simByName(u.Sims())
-		// Restore each world's root agent memory from the store.
-		if dbStore, ok := st.(*store.Store); ok {
-			for _, s := range u.Sims() {
-				restoreRootMemory(ctx, dbStore, s)
-			}
-		}
-		if cfg != nil {
-			yamlWebAddr = cfg.Web.Addr
-			yamlSaveMode = cfg.Save.Mode
-			yamlMultimodal = cfg.Multimodal.Spec()
-			yamlImageCache = cfg.Multimodal.CacheDir
-			yamlMultimodalMM = cfg.Multimodal.MinPropsCount
-		}
-	case *brainSpec != "none":
-		embedder, err := buildEmbedder(*embedderSpec)
-		if err != nil {
-			return fmt.Errorf("build embedder: %w", err)
-		}
-		s, err := buildSim(w, *brainSpec, embedder, *importanceSpec, *reflectInterval, *maxAgents, *maxSpawnDepth)
-		if err != nil {
-			return fmt.Errorf("build sim: %w", err)
-		}
-		defer func() { _ = s.Close() }()
-		stepper = newSimAdapter(s)
-		simProvider = func() *sim.Sim { return s }
-		attachOnSims = []*sim.Sim{s}
-		simForWorld = simByName([]*sim.Sim{s})
-		if dbStore, ok := st.(*store.Store); ok {
-			restoreRootMemory(ctx, dbStore, s)
-		}
+	rc, err := buildRunComponents(ctx, w, st, runComponentOpts{
+		embedderSpec:  *embedderSpec,
+		configPath:    *configPath,
+		brainSpec:     *brainSpec,
+		importance:    *importanceSpec,
+		reflect:       *reflectInterval,
+		maxAgents:     *maxAgents,
+		maxSpawnDepth: *maxSpawnDepth,
+	})
+	if err != nil {
+		return err
 	}
+	defer rc.cleanup()
+	w = rc.world
+	stepper := rc.stepper
+	simProvider := rc.simProvider
+	attachOnSims := rc.attachOnSims
+	simForWorld := rc.simForWorld
+	yamlWebAddr := rc.yamlWebAddr
+	yamlSaveMode := rc.yamlSaveMode
+	yamlMultimodal := rc.yamlMultimodal
+	yamlImageCache := rc.yamlImageCache
+	yamlMultimodalMM := rc.yamlMultimodalMM
 
 	// Wrap st with a full-saver so manual 's' and autosave persist
 	// memory alongside world events.
@@ -284,73 +233,34 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		st = &fullSaver{store: dbStore, simForWorld: simForWorld}
 	}
 
-	// Resolve the multimodal spec: CLI flag wins, then YAML. Blank
-	// CLI means "use YAML"; explicit "none" disables even when YAML
-	// would enable it.
-	resolvedMultimodal := *multimodalSpec
-	if resolvedMultimodal == "" {
-		resolvedMultimodal = yamlMultimodal
-	}
-	resolvedCacheDir := *imageCacheDir
-	if resolvedCacheDir == "" {
-		resolvedCacheDir = yamlImageCache
-	}
-	mmOpts, imageCache, err := buildMultimodal(resolvedMultimodal, resolvedCacheDir)
+	// Each resolved setting takes the CLI flag when set, else the YAML value.
+	// (For multimodal, blank CLI means "use YAML"; explicit "none" disables.)
+	imageCache, err := setupMultimodal(attachOnSims,
+		firstNonEmpty(*multimodalSpec, yamlMultimodal),
+		firstNonEmpty(*imageCacheDir, yamlImageCache), yamlMultimodalMM)
 	if err != nil {
-		return fmt.Errorf("multimodal: %w", err)
-	}
-	if mmOpts != nil {
-		if yamlMultimodalMM > 0 {
-			mmOpts.MinPropsCount = yamlMultimodalMM
-		}
-		for _, s := range attachOnSims {
-			s.SetMultimodal(mmOpts)
-		}
+		return err
 	}
 
 	// Apply the --narrator CLI override after sims are built. Blank
 	// means "use whatever YAML configured"; "none" disables on every
 	// world; any other spec installs a narrator on every world with
 	// that brain.
-	if err := applyNarratorOverride(ctx, *narratorSpec, attachOnSims); err != nil {
+	if err := applyNarratorOverride(*narratorSpec, attachOnSims); err != nil {
 		return fmt.Errorf("narrator: %w", err)
 	}
 
-	// Resolve the web address: CLI flag wins, then YAML config.
-	resolvedWebAddr := *webAddr
-	if resolvedWebAddr == "" {
-		resolvedWebAddr = yamlWebAddr
-	}
+	resolvedWebAddr := firstNonEmpty(*webAddr, yamlWebAddr)
 	if resolvedWebAddr != "" && simProvider != nil {
-		stop, err := startWebUI(ctx, resolvedWebAddr, simProvider, attachOnSims, imageCache, stderr)
+		stop, err := startWebUI(resolvedWebAddr, simProvider, attachOnSims, imageCache, stderr)
 		if err != nil {
 			return err
 		}
 		defer stop()
 	}
 
-	// Resolve the save mode: CLI flag wins, then YAML config.
-	resolvedSaveMode := *saveMode
-	if resolvedSaveMode == "" {
-		resolvedSaveMode = yamlSaveMode
-	}
-	mode, err := store.ParseSaveMode(resolvedSaveMode)
-	if err != nil {
+	if err := startAutosave(ctx, st, w, firstNonEmpty(*saveMode, yamlSaveMode), stderr); err != nil {
 		return err
-	}
-	if mode.Kind == "interval" {
-		concreteStore, ok := st.(store.Saver)
-		if !ok || concreteStore == nil {
-			return fmt.Errorf("save-mode interval requires --db; no store attached")
-		}
-		go func() {
-			err := store.RunAutosave(ctx, concreteStore, w, mode.Interval, func(saveErr error) {
-				_, _ = fmt.Fprintln(stderr, "autosave:", saveErr)
-			})
-			if err != nil && !errors.Is(err, context.Canceled) {
-				_, _ = fmt.Fprintln(stderr, "autosave:", err)
-			}
-		}()
 	}
 
 	if err := tui.Run(ctx, tui.RunOptions{
@@ -360,15 +270,154 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		TickInterval: *tickInterval,
 		Output:       stdout,
 	}); err != nil {
-		return err
+		return fmt.Errorf("run tui: %w", err)
 	}
 	return nil
+}
+
+// setupMultimodal builds the image generator from the resolved spec and attaches
+// it to each sim, returning the image cache for the web UI to serve.
+func setupMultimodal(sims []*sim.Sim, spec, cacheDir string, minProps int) (*imagegen.Cache, error) {
+	mmOpts, cache, err := buildMultimodal(spec, cacheDir)
+	if err != nil {
+		return nil, fmt.Errorf("multimodal: %w", err)
+	}
+	if mmOpts != nil {
+		if minProps > 0 {
+			mmOpts.MinPropsCount = minProps
+		}
+		for _, s := range sims {
+			s.SetMultimodal(mmOpts)
+		}
+	}
+	return cache, nil
+}
+
+// startAutosave parses the save mode and, for interval mode, launches the
+// background autosave loop. manual mode is a no-op.
+func startAutosave(ctx context.Context, st tui.Storer, w *world.World, saveMode string, stderr io.Writer) error {
+	mode, err := store.ParseSaveMode(saveMode)
+	if err != nil {
+		return fmt.Errorf("parse save-mode: %w", err)
+	}
+	if mode.Kind != "interval" {
+		return nil
+	}
+	concreteStore, ok := st.(store.Saver)
+	if !ok || concreteStore == nil {
+		return fmt.Errorf("save-mode interval requires --db; no store attached")
+	}
+	go func() {
+		err := store.RunAutosave(ctx, concreteStore, w, mode.Interval, func(saveErr error) {
+			_, _ = fmt.Fprintln(stderr, "autosave:", saveErr)
+		})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			_, _ = fmt.Fprintln(stderr, "autosave:", err)
+		}
+	}()
+	return nil
+}
+
+// runComponentOpts carries the run flags that select and build the sim or
+// universe backing a `run` session.
+type runComponentOpts struct {
+	embedderSpec  string
+	configPath    string
+	brainSpec     string
+	importance    string
+	reflect       uint64
+	maxAgents     int
+	maxSpawnDepth int
+}
+
+// runComponents holds the assembled stepper, web provider, and YAML-derived
+// defaults for a `run` session, plus a cleanup func to release them.
+type runComponents struct {
+	world            *world.World
+	stepper          tui.Stepper
+	simProvider      webui.SimProvider
+	attachOnSims     []*sim.Sim
+	simForWorld      func(name string) *sim.Sim
+	yamlWebAddr      string
+	yamlSaveMode     string
+	yamlMultimodal   string
+	yamlImageCache   string
+	yamlMultimodalMM int
+	cleanup          func()
+}
+
+// buildRunComponents assembles a universe (from a YAML config) or a single sim
+// (from a brain spec), or neither when the brain is "none".
+func buildRunComponents(ctx context.Context, w *world.World, st tui.Storer, o runComponentOpts) (*runComponents, error) {
+	switch {
+	case o.configPath != "":
+		return buildUniverseComponents(ctx, st, o)
+	case o.brainSpec != "none":
+		return buildSimComponents(ctx, w, st, o)
+	default:
+		return &runComponents{world: w, cleanup: func() {}}, nil
+	}
+}
+
+func buildUniverseComponents(ctx context.Context, st tui.Storer, o runComponentOpts) (*runComponents, error) {
+	embedder, err := buildEmbedder(o.embedderSpec)
+	if err != nil {
+		return nil, fmt.Errorf("build embedder: %w", err)
+	}
+	u, cfg, err := loadUniverse(ctx, o.configPath, embedder, st)
+	if err != nil {
+		return nil, err
+	}
+	// Restore each world's root agent memory from the store.
+	if dbStore, ok := st.(*store.Store); ok {
+		for _, s := range u.Sims() {
+			restoreRootMemory(ctx, dbStore, s)
+		}
+	}
+	rc := &runComponents{
+		world:        u.Focused().World, // align save/load and the TUI on the focused world
+		stepper:      newUniverseAdapter(u),
+		simProvider:  func() *sim.Sim { return u.Focused() },
+		attachOnSims: u.Sims(),
+		simForWorld:  simByName(u.Sims()),
+		cleanup:      func() { _ = u.Close() },
+	}
+	if cfg != nil {
+		rc.yamlWebAddr = cfg.Web.Addr
+		rc.yamlSaveMode = cfg.Save.Mode
+		rc.yamlMultimodal = cfg.Multimodal.Spec()
+		rc.yamlImageCache = cfg.Multimodal.CacheDir
+		rc.yamlMultimodalMM = cfg.Multimodal.MinPropsCount
+	}
+	return rc, nil
+}
+
+func buildSimComponents(ctx context.Context, w *world.World, st tui.Storer, o runComponentOpts) (*runComponents, error) {
+	embedder, err := buildEmbedder(o.embedderSpec)
+	if err != nil {
+		return nil, fmt.Errorf("build embedder: %w", err)
+	}
+	s, err := buildSim(w, o.brainSpec, embedder, o.importance, o.reflect, o.maxAgents, o.maxSpawnDepth)
+	if err != nil {
+		return nil, fmt.Errorf("build sim: %w", err)
+	}
+	if dbStore, ok := st.(*store.Store); ok {
+		restoreRootMemory(ctx, dbStore, s)
+	}
+	return &runComponents{
+		world:        w,
+		stepper:      newSimAdapter(s),
+		simProvider:  func() *sim.Sim { return s },
+		attachOnSims: []*sim.Sim{s},
+		simForWorld:  simByName([]*sim.Sim{s}),
+		cleanup:      func() { _ = s.Close() },
+	}, nil
 }
 
 // startWebUI launches the embedded HTTP viewer and attaches its
 // broker to each sim's Observer. Returns a stop func the caller
 // must invoke before exiting so the listener releases its port.
-func startWebUI(ctx context.Context, addr string, provider webui.SimProvider, attachOn []*sim.Sim, imageCache *imagegen.Cache, stderr io.Writer) (func(), error) {
+func startWebUI(addr string, provider webui.SimProvider, attachOn []*sim.Sim, imageCache *imagegen.Cache, stderr io.Writer) (func(), error) {
 	logger := log.New(stderr, "", log.LstdFlags)
 	server, err := webui.New(webui.Options{
 		Addr:       addr,
@@ -424,15 +473,7 @@ func buildMultimodal(spec, cacheDir string) (*sim.MultimodalOptions, *imagegen.C
 	if spec == "" || spec == "none" {
 		return nil, nil, nil
 	}
-	dir := cacheDir
-	if dir == "" {
-		base, err := os.UserCacheDir()
-		if err != nil || base == "" {
-			base = filepath.Join(os.TempDir(), "fiatlux-cache")
-		}
-		dir = filepath.Join(base, "fiatlux", "images")
-	}
-	cache := imagegen.NewCache(dir)
+	cache := imagegen.NewCache(resolveImageCacheDir(cacheDir))
 
 	switch {
 	case strings.HasPrefix(spec, "openaicompat:"):
@@ -446,7 +487,7 @@ func buildMultimodal(spec, cacheDir string) (*sim.MultimodalOptions, *imagegen.C
 			Model:   model,
 		})
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("multimodal openaicompat: %w", err)
 		}
 		return &sim.MultimodalOptions{Generator: client, Cache: cache}, cache, nil
 	case spec == "openai" || strings.HasPrefix(spec, "openai:"):
@@ -460,12 +501,25 @@ func buildMultimodal(spec, cacheDir string) (*sim.MultimodalOptions, *imagegen.C
 		}
 		client, err := imageopenai.New(imageopenai.Options{APIKey: apiKey, Model: model})
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("multimodal openai: %w", err)
 		}
 		return &sim.MultimodalOptions{Generator: client, Cache: cache}, cache, nil
 	default:
 		return nil, nil, fmt.Errorf("unknown multimodal spec %q (try none | openai[:<model>] | openaicompat:<url>::<model>)", spec)
 	}
+}
+
+// resolveImageCacheDir returns cacheDir, or a default under the user cache dir
+// (falling back to a temp dir) when it is empty.
+func resolveImageCacheDir(cacheDir string) string {
+	if cacheDir != "" {
+		return cacheDir
+	}
+	base, err := os.UserCacheDir()
+	if err != nil || base == "" {
+		base = filepath.Join(os.TempDir(), "fiatlux-cache")
+	}
+	return filepath.Join(base, "fiatlux", "images")
 }
 
 // chainObservers composes two Sim.Observer-shaped callbacks. nil
@@ -489,7 +543,7 @@ func chainObservers(a, b func(sim.StepResult)) func(sim.StepResult) {
 //   - any other string is treated as a brain spec; a fresh narrator
 //     is built for each sim with the package defaults for cadence
 //     (use YAML when finer control is needed).
-func applyNarratorOverride(ctx context.Context, spec string, sims []*sim.Sim) error {
+func applyNarratorOverride(spec string, sims []*sim.Sim) error {
 	switch spec {
 	case "":
 		return nil
@@ -507,7 +561,7 @@ func applyNarratorOverride(ctx context.Context, spec string, sims []*sim.Sim) er
 		n, err := narrator.New(narrator.Options{Brain: br})
 		if err != nil {
 			_ = br.Close()
-			return err
+			return fmt.Errorf("narrator %q: %w", spec, err)
 		}
 		s.SetNarrator(n)
 	}
@@ -541,7 +595,7 @@ func buildSim(w *world.World, spec string, embedder memory.Embedder, importanceS
 	factory := func(_ context.Context, childSpec string) (brain.Brain, error) {
 		return buildBrain(childSpec)
 	}
-	return sim.New(sim.Options{
+	s, err := sim.New(sim.Options{
 		World:           w,
 		Brain:           br,
 		Tools:           tools.Default(),
@@ -552,6 +606,10 @@ func buildSim(w *world.World, spec string, embedder memory.Embedder, importanceS
 		MaxAgents:       maxAgents,
 		MaxSpawnDepth:   maxSpawnDepth,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("new sim: %w", err)
+	}
+	return s, nil
 }
 
 // buildEmbedder parses --embedder. Supported:
@@ -576,7 +634,11 @@ func buildEmbedder(spec string) (memory.Embedder, error) {
 		if key == "" {
 			return nil, errors.New("embedder openai: OPENAI_API_KEY is required")
 		}
-		return memory.NewOpenAI(memory.OpenAIOptions{APIKey: key, Model: tail})
+		emb, err := memory.NewOpenAI(memory.OpenAIOptions{APIKey: key, Model: tail})
+		if err != nil {
+			return nil, fmt.Errorf("embedder openai: %w", err)
+		}
+		return emb, nil
 	}
 	return nil, fmt.Errorf("embedder spec %q not recognised", spec)
 }
@@ -588,74 +650,106 @@ func buildBrain(spec string) (brain.Brain, error) {
 	head, tail, _ := strings.Cut(spec, ":")
 	switch head {
 	case "stub":
-		if tail == "" {
-			return stub.New(uint64(time.Now().UnixNano()), rand.Uint64(), tools.Default()), nil
-		}
-		seed, err := strconv.ParseUint(tail, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("brain stub seed %q: %w", tail, err)
-		}
-		return stub.New(seed, seed*0x9E3779B97F4A7C15, tools.Default()), nil
-
+		return buildStubBrain(tail)
 	case "anthropic":
-		key := os.Getenv("ANTHROPIC_API_KEY")
-		if key == "" {
-			return nil, errors.New("brain anthropic: ANTHROPIC_API_KEY is required")
-		}
-		model := tail
-		if model == "" {
-			model = anthropic.DefaultModel
-		}
-		return anthropic.New(anthropic.Options{
-			APIKey:       key,
-			Model:        model,
-			SystemPrompt: sim.DefaultSystemPrompt,
-			HTTPClient:   &http.Client{Timeout: 90 * time.Second},
-		})
-
+		return buildAnthropicBrain(tail)
 	case "openai":
-		key := os.Getenv("OPENAI_API_KEY")
-		if key == "" {
-			return nil, errors.New("brain openai: OPENAI_API_KEY is required")
-		}
-		model := tail
-		if model == "" {
-			model = openai.DefaultModel
-		}
-		return openai.New(openai.Options{
-			APIKey:       key,
-			Model:        model,
-			SystemPrompt: sim.DefaultSystemPrompt,
-			HTTPClient:   &http.Client{Timeout: 90 * time.Second},
-		})
-
+		return buildOpenAIBrain(tail)
 	case "ollama":
-		model := tail
-		if model == "" {
-			model = ollama.DefaultModel
-		}
-		return ollama.New(ollama.Options{
-			Model:        model,
-			SystemPrompt: sim.DefaultSystemPrompt,
-			HTTPClient:   &http.Client{Timeout: 5 * time.Minute},
-		})
-
+		return buildOllamaBrain(tail)
 	case "openaicompat":
-		// Spec form: openaicompat:<base_url>::<model>. We split on
-		// the first "::" so URLs containing ":" (ports) parse cleanly.
-		base, model, ok := strings.Cut(tail, "::")
-		if !ok || base == "" || model == "" {
-			return nil, errors.New(`brain openaicompat: expected "openaicompat:<base_url>::<model>"`)
-		}
-		return openaicompat.New(openaicompat.Options{
-			BaseURL:      base,
-			APIKey:       os.Getenv("FIATLUX_OPENAICOMPAT_KEY"),
-			Model:        model,
-			SystemPrompt: sim.DefaultSystemPrompt,
-			HTTPClient:   &http.Client{Timeout: 5 * time.Minute},
-		})
+		return buildOpenAICompatBrain(tail)
 	}
 	return nil, fmt.Errorf("brain spec %q not recognised; try 'fiatlux help'", spec)
+}
+
+func buildStubBrain(tail string) (brain.Brain, error) {
+	if tail == "" {
+		return stub.New(uint64(time.Now().UnixNano()), rand.Uint64(), tools.Default()), nil
+	}
+	seed, err := strconv.ParseUint(tail, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("brain stub seed %q: %w", tail, err)
+	}
+	return stub.New(seed, seed*0x9E3779B97F4A7C15, tools.Default()), nil
+}
+
+func buildAnthropicBrain(tail string) (brain.Brain, error) {
+	key := os.Getenv("ANTHROPIC_API_KEY")
+	if key == "" {
+		return nil, errors.New("brain anthropic: ANTHROPIC_API_KEY is required")
+	}
+	model := tail
+	if model == "" {
+		model = anthropic.DefaultModel
+	}
+	b, err := anthropic.New(anthropic.Options{
+		APIKey:       key,
+		Model:        model,
+		SystemPrompt: sim.DefaultSystemPrompt,
+		HTTPClient:   &http.Client{Timeout: 90 * time.Second},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("brain anthropic: %w", err)
+	}
+	return b, nil
+}
+
+func buildOpenAIBrain(tail string) (brain.Brain, error) {
+	key := os.Getenv("OPENAI_API_KEY")
+	if key == "" {
+		return nil, errors.New("brain openai: OPENAI_API_KEY is required")
+	}
+	model := tail
+	if model == "" {
+		model = openai.DefaultModel
+	}
+	b, err := openai.New(openai.Options{
+		APIKey:       key,
+		Model:        model,
+		SystemPrompt: sim.DefaultSystemPrompt,
+		HTTPClient:   &http.Client{Timeout: 90 * time.Second},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("brain openai: %w", err)
+	}
+	return b, nil
+}
+
+func buildOllamaBrain(tail string) (brain.Brain, error) {
+	model := tail
+	if model == "" {
+		model = ollama.DefaultModel
+	}
+	b, err := ollama.New(ollama.Options{
+		Model:        model,
+		SystemPrompt: sim.DefaultSystemPrompt,
+		HTTPClient:   &http.Client{Timeout: 5 * time.Minute},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("brain ollama: %w", err)
+	}
+	return b, nil
+}
+
+func buildOpenAICompatBrain(tail string) (brain.Brain, error) {
+	// Spec form: openaicompat:<base_url>::<model>. We split on the first "::"
+	// so URLs containing ":" (ports) parse cleanly.
+	base, model, ok := strings.Cut(tail, "::")
+	if !ok || base == "" || model == "" {
+		return nil, errors.New(`brain openaicompat: expected "openaicompat:<base_url>::<model>"`)
+	}
+	b, err := openaicompat.New(openaicompat.Options{
+		BaseURL:      base,
+		APIKey:       os.Getenv("FIATLUX_OPENAICOMPAT_KEY"),
+		Model:        model,
+		SystemPrompt: sim.DefaultSystemPrompt,
+		HTTPClient:   &http.Client{Timeout: 5 * time.Minute},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("brain openaicompat: %w", err)
+	}
+	return b, nil
 }
 
 // fullSaver implements tui.Storer by persisting both world events
@@ -668,7 +762,7 @@ type fullSaver struct {
 
 func (f *fullSaver) Save(ctx context.Context, w *world.World) error {
 	if err := f.store.Save(ctx, w); err != nil {
-		return err
+		return fmt.Errorf("save world: %w", err)
 	}
 	s := f.simForWorld(w.Name())
 	if s == nil {
@@ -678,7 +772,10 @@ func (f *fullSaver) Save(ctx context.Context, w *world.World) error {
 	if root == nil || root.Memory == nil {
 		return nil
 	}
-	return f.store.SaveMemoryRecords(ctx, w.Name(), root.Memory.All())
+	if err := f.store.SaveMemoryRecords(ctx, w.Name(), root.Memory.All()); err != nil {
+		return fmt.Errorf("save memory: %w", err)
+	}
+	return nil
 }
 
 // simByName returns a closure that finds the sim whose world.Name()
@@ -737,7 +834,7 @@ func newSimAdapter(s *sim.Sim) *simAdapter {
 func (a *simAdapter) Step(ctx context.Context) (tui.StepSummary, error) {
 	res, err := a.s.Step(ctx)
 	if err != nil {
-		return tui.StepSummary{}, err
+		return tui.StepSummary{}, fmt.Errorf("step: %w", err)
 	}
 	return tui.StepSummary{
 		Tick:       uint64(res.Tick),
@@ -802,7 +899,7 @@ func (a *simAdapter) InterveneCreate(typeLabel string) (string, error) {
 		Properties: map[string]any{"origin": "void"},
 	}
 	if err := a.s.Intervene(context.Background(), op); err != nil {
-		return "", err
+		return "", fmt.Errorf("intervene: %w", err)
 	}
 	return fmt.Sprintf("the void willed a %s into being", typeLabel), nil
 }
@@ -810,7 +907,7 @@ func (a *simAdapter) InterveneCreate(typeLabel string) (string, error) {
 func (a *simAdapter) InterveneDestroy(entityID uint64) (string, error) {
 	op := sim.Intervention{Op: sim.InterveneDestroy, EntityID: entityID}
 	if err := a.s.Intervene(context.Background(), op); err != nil {
-		return "", err
+		return "", fmt.Errorf("intervene: %w", err)
 	}
 	return fmt.Sprintf("the void unmade #%d", entityID), nil
 }
@@ -818,7 +915,7 @@ func (a *simAdapter) InterveneDestroy(entityID uint64) (string, error) {
 func (a *simAdapter) InterveneSpeak(content string) (string, error) {
 	op := sim.Intervention{Op: sim.InterveneSpeak, Content: content}
 	if err := a.s.Intervene(context.Background(), op); err != nil {
-		return "", err
+		return "", fmt.Errorf("intervene: %w", err)
 	}
 	return "the void whispered to every agent", nil
 }
@@ -834,7 +931,7 @@ func (a *simAdapter) MemorySnapshot() tui.MemorySnapshot {
 	if len(roster) == 0 {
 		return tui.MemorySnapshot{}
 	}
-	var ag = roster[0]
+	ag := roster[0]
 	for _, x := range roster {
 		if uint64(x.EntityID) == focused {
 			ag = x
@@ -881,7 +978,7 @@ func newUniverseAdapter(u *sim.Universe) *universeAdapter {
 func (a *universeAdapter) Step(ctx context.Context) (tui.StepSummary, error) {
 	res, err := a.u.Step(ctx)
 	if err != nil {
-		return tui.StepSummary{}, err
+		return tui.StepSummary{}, fmt.Errorf("step: %w", err)
 	}
 	return tui.StepSummary{
 		Tick:       uint64(res.Tick),
@@ -969,7 +1066,7 @@ func (a *universeAdapter) InterveneCreate(typeLabel string) (string, error) {
 		Properties: map[string]any{"origin": "void"},
 	}
 	if err := a.u.Focused().Intervene(context.Background(), op); err != nil {
-		return "", err
+		return "", fmt.Errorf("intervene: %w", err)
 	}
 	return fmt.Sprintf("the void willed a %s into being", typeLabel), nil
 }
@@ -977,7 +1074,7 @@ func (a *universeAdapter) InterveneCreate(typeLabel string) (string, error) {
 func (a *universeAdapter) InterveneDestroy(entityID uint64) (string, error) {
 	op := sim.Intervention{Op: sim.InterveneDestroy, EntityID: entityID}
 	if err := a.u.Focused().Intervene(context.Background(), op); err != nil {
-		return "", err
+		return "", fmt.Errorf("intervene: %w", err)
 	}
 	return fmt.Sprintf("the void unmade #%d", entityID), nil
 }
@@ -985,7 +1082,7 @@ func (a *universeAdapter) InterveneDestroy(entityID uint64) (string, error) {
 func (a *universeAdapter) InterveneSpeak(content string) (string, error) {
 	op := sim.Intervention{Op: sim.InterveneSpeak, Content: content}
 	if err := a.u.Focused().Intervene(context.Background(), op); err != nil {
-		return "", err
+		return "", fmt.Errorf("intervene: %w", err)
 	}
 	return "the void whispered to every agent", nil
 }
@@ -1035,7 +1132,7 @@ func loadUniverse(ctx context.Context, path string, embedder memory.Embedder, st
 	defer func() { _ = f.Close() }()
 	cfg, err := sim.LoadYAML(f)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("load config: %w", err)
 	}
 	factory := func(_ context.Context, spec string) (brain.Brain, error) {
 		return buildBrain(spec)
@@ -1043,7 +1140,7 @@ func loadUniverse(ctx context.Context, path string, embedder memory.Embedder, st
 	loader := storeWorldLoader(st)
 	u, err := cfg.BuildUniverse(ctx, factory, embedder, loader)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("build universe: %w", err)
 	}
 	return u, cfg, nil
 }
@@ -1067,7 +1164,7 @@ func storeWorldLoader(st tui.Storer) sim.WorldLoader {
 		if errors.Is(err, store.ErrWorldNotFound) {
 			return nil, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("load world: %w", err)
 	}
 }
 
@@ -1081,7 +1178,7 @@ func cmdReplay(args []string, stdout, stderr io.Writer) error {
 	worldName := fs.String("world", "kosmos", "name of the world to replay")
 	replayTick := fs.Duration("replay-tick", 100*time.Millisecond, "delay between replayed events")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parse flags: %w", err)
 	}
 	if *dbPath == "" {
 		return errors.New("replay: --db is required")
@@ -1108,7 +1205,7 @@ func cmdReplay(args []string, stdout, stderr io.Writer) error {
 
 	rp, err := sim.NewReplay(*worldName, events)
 	if err != nil {
-		return err
+		return fmt.Errorf("new replay: %w", err)
 	}
 	stepper := replayAdapter{r: rp}
 
@@ -1118,7 +1215,7 @@ func cmdReplay(args []string, stdout, stderr io.Writer) error {
 		TickInterval: *replayTick,
 		Output:       stdout,
 	}); err != nil {
-		return err
+		return fmt.Errorf("run tui: %w", err)
 	}
 	return nil
 }
@@ -1140,6 +1237,169 @@ type stepSummary struct {
 
 // cmdStep runs the sim headlessly for --count steps and prints a
 // summary. No TUI, no /dev/tty required.
+// firstNonEmpty returns a when it is non-empty, otherwise b.
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// openStore opens the SQLite store at dbPath (empty = no store), returning the
+// storer and a close func the caller must defer.
+func openStore(ctx context.Context, dbPath string) (tui.Storer, func(), error) {
+	if dbPath == "" {
+		return nil, func() {}, nil
+	}
+	s, err := store.Open(ctx, dbPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open store: %w", err)
+	}
+	return s, func() { _ = s.Close() }, nil
+}
+
+// runSteps advances the stepper count times, accumulating a step summary and
+// pausing tickDelay between steps. It stops early on context cancellation.
+func runSteps(ctx context.Context, s stepper, count int, tickDelay time.Duration) (stepSummary, error) {
+	summary := stepSummary{ToolCounts: map[string]int{}}
+	start := time.Now()
+	for i := 0; i < count; i++ {
+		if ctx.Err() != nil {
+			break
+		}
+		res, err := s.Step(ctx)
+		if err != nil {
+			return summary, fmt.Errorf("step %d: %w", i, err)
+		}
+		summary.Steps++
+		if res.Skipped {
+			summary.StepsSkipped++
+		}
+		if res.ToolName != "" {
+			summary.ToolCounts[res.ToolName]++
+		}
+		if res.ToolErr != nil {
+			summary.ToolErrors++
+		}
+		if tickDelay > 0 && i+1 < count {
+			select {
+			case <-ctx.Done():
+			case <-time.After(tickDelay):
+			}
+		}
+	}
+	summary.ElapsedMS = time.Since(start).Milliseconds()
+	return summary, nil //nolint:nilerr // res.ToolErr is tallied in the summary, not propagated
+}
+
+// serveComponents holds the headless serve loop's stepper, web provider, and
+// YAML-derived defaults, plus a cleanup func.
+type serveComponents struct {
+	world        *world.World
+	loop         stepper
+	simProvider  webui.SimProvider
+	attachOnSims []*sim.Sim
+	simForWorld  func(name string) *sim.Sim
+	yamlWebAddr  string
+	yamlSaveMode string
+	cleanup      func()
+}
+
+// buildServeComponents assembles the serve loop from a YAML universe or a single
+// sim. Unlike `run`, a brain of "none" is an error (the viewer needs a sim).
+func buildServeComponents(ctx context.Context, w *world.World, st tui.Storer, o runComponentOpts) (*serveComponents, error) {
+	switch {
+	case o.configPath != "":
+		return buildServeUniverse(ctx, st, o)
+	case o.brainSpec != "none":
+		return buildServeSim(ctx, w, st, o)
+	default:
+		return nil, errors.New("serve: --brain=none is not supported (web viewer needs a sim to render)")
+	}
+}
+
+func buildServeUniverse(ctx context.Context, st tui.Storer, o runComponentOpts) (*serveComponents, error) {
+	embedder, err := buildEmbedder(o.embedderSpec)
+	if err != nil {
+		return nil, fmt.Errorf("build embedder: %w", err)
+	}
+	u, cfg, err := loadUniverse(ctx, o.configPath, embedder, st)
+	if err != nil {
+		return nil, err
+	}
+	if dbStore, ok := st.(*store.Store); ok {
+		for _, s := range u.Sims() {
+			restoreRootMemory(ctx, dbStore, s)
+		}
+	}
+	sc := &serveComponents{
+		world:        u.Focused().World,
+		loop:         u,
+		simProvider:  func() *sim.Sim { return u.Focused() },
+		attachOnSims: u.Sims(),
+		simForWorld:  simByName(u.Sims()),
+		cleanup:      func() { _ = u.Close() },
+	}
+	if cfg != nil {
+		sc.yamlWebAddr = cfg.Web.Addr
+		sc.yamlSaveMode = cfg.Save.Mode
+	}
+	return sc, nil
+}
+
+func buildServeSim(ctx context.Context, w *world.World, st tui.Storer, o runComponentOpts) (*serveComponents, error) {
+	embedder, err := buildEmbedder(o.embedderSpec)
+	if err != nil {
+		return nil, fmt.Errorf("build embedder: %w", err)
+	}
+	s, err := buildSim(w, o.brainSpec, embedder, o.importance, o.reflect, o.maxAgents, o.maxSpawnDepth)
+	if err != nil {
+		return nil, fmt.Errorf("build sim: %w", err)
+	}
+	if dbStore, ok := st.(*store.Store); ok {
+		restoreRootMemory(ctx, dbStore, s)
+	}
+	return &serveComponents{
+		world:        w,
+		loop:         s,
+		simProvider:  func() *sim.Sim { return s },
+		attachOnSims: []*sim.Sim{s},
+		simForWorld:  simByName([]*sim.Sim{s}),
+		cleanup:      func() { _ = s.Close() },
+	}, nil
+}
+
+// serveLoop drives the stepper on a ticker until the context is cancelled, then
+// makes a best-effort final save.
+func serveLoop(ctx context.Context, loop stepper, st tui.Storer, w *world.World, tickInterval time.Duration, stderr io.Writer) {
+	ticker := time.NewTicker(tickInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			finalSave(st, w, stderr)
+			return
+		case <-ticker.C:
+			if _, err := loop.Step(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				_, _ = fmt.Fprintln(stderr, "step:", err)
+			}
+		}
+	}
+}
+
+// finalSave persists the world with a fresh, short-lived context (the run's
+// context is already cancelled by the time this is called).
+func finalSave(st tui.Storer, w *world.World, stderr io.Writer) {
+	if st == nil {
+		return
+	}
+	saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := st.Save(saveCtx, w); err != nil {
+		_, _ = fmt.Fprintln(stderr, "final save:", err)
+	}
+}
+
 func cmdStep(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("fiatlux step", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -1155,7 +1415,7 @@ func cmdStep(args []string, stdout, stderr io.Writer) error {
 	maxSpawnDepth := fs.Int("max-spawn-depth", 3, "cap on the spawn graph height")
 	jsonOut := fs.Bool("json", false, "emit summary as JSON instead of human-readable text")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parse flags: %w", err)
 	}
 	if *count <= 0 {
 		return fmt.Errorf("step: --count must be > 0 (got %d)", *count)
@@ -1164,21 +1424,11 @@ func cmdStep(args []string, stdout, stderr io.Writer) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	var (
-		st     tui.Storer
-		closer io.Closer
-	)
-	if *dbPath != "" {
-		s, err := store.Open(ctx, *dbPath)
-		if err != nil {
-			return fmt.Errorf("open store: %w", err)
-		}
-		st = s
-		closer = s
+	st, closeStore, err := openStore(ctx, *dbPath)
+	if err != nil {
+		return err
 	}
-	if closer != nil {
-		defer func() { _ = closer.Close() }()
-	}
+	defer closeStore()
 
 	w, err := loadOrNewWorld(ctx, st, *worldName)
 	if err != nil {
@@ -1203,34 +1453,10 @@ func cmdStep(args []string, stdout, stderr io.Writer) error {
 		st = &fullSaver{store: dbStore, simForWorld: simByName([]*sim.Sim{s})}
 	}
 
-	summary := stepSummary{ToolCounts: map[string]int{}}
-	start := time.Now()
-	for i := 0; i < *count; i++ {
-		if ctx.Err() != nil {
-			break
-		}
-		res, err := s.Step(ctx)
-		if err != nil {
-			return fmt.Errorf("step %d: %w", i, err)
-		}
-		summary.Steps++
-		if res.Skipped {
-			summary.StepsSkipped++
-		}
-		if res.ToolName != "" {
-			summary.ToolCounts[res.ToolName]++
-		}
-		if res.ToolErr != nil {
-			summary.ToolErrors++
-		}
-		if *tickDelay > 0 && i+1 < *count {
-			select {
-			case <-ctx.Done():
-			case <-time.After(*tickDelay):
-			}
-		}
+	summary, err := runSteps(ctx, s, *count, *tickDelay)
+	if err != nil {
+		return err
 	}
-	summary.ElapsedMS = time.Since(start).Milliseconds()
 	summary.Ticks = uint64(w.Tick())
 	summary.EntitiesAlive = w.EntityCount()
 	summary.RelationshipsAlive = w.RelationshipCount()
@@ -1249,9 +1475,13 @@ func cmdStep(args []string, stdout, stderr io.Writer) error {
 	if *jsonOut {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(summary)
+		if err := enc.Encode(summary); err != nil {
+			return fmt.Errorf("encode summary: %w", err)
+		}
+		return nil
 	}
-	return writeHumanSummary(stdout, summary)
+	writeHumanSummary(stdout, summary)
+	return nil
 }
 
 // stepper is the minimal interface implemented by both *sim.Sim and
@@ -1281,99 +1511,50 @@ func cmdServe(args []string, stdout, stderr io.Writer) error {
 	saveMode := fs.String("save-mode", "", "persistence cadence: manual | interval:<duration> (e.g. interval:30s)")
 	_ = stdout
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parse flags: %w", err)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	var (
-		st     tui.Storer
-		closer io.Closer
-	)
-	if *dbPath != "" {
-		s, err := store.Open(ctx, *dbPath)
-		if err != nil {
-			return fmt.Errorf("open store: %w", err)
-		}
-		st = s
-		closer = s
+	st, closeStore, err := openStore(ctx, *dbPath)
+	if err != nil {
+		return err
 	}
-	if closer != nil {
-		defer func() { _ = closer.Close() }()
-	}
+	defer closeStore()
 
 	w, err := loadOrNewWorld(ctx, st, *worldName)
 	if err != nil {
 		return err
 	}
 
-	var (
-		loop         stepper
-		simProvider  webui.SimProvider
-		yamlWebAddr  string
-		yamlSaveMode string
-		attachOnSims []*sim.Sim
-		simForWorld  func(name string) *sim.Sim
-	)
-	switch {
-	case *configPath != "":
-		embedder, err := buildEmbedder(*embedderSpec)
-		if err != nil {
-			return fmt.Errorf("build embedder: %w", err)
-		}
-		u, cfg, err := loadUniverse(ctx, *configPath, embedder, st)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = u.Close() }()
-		w = u.Focused().World
-		loop = u
-		simProvider = func() *sim.Sim { return u.Focused() }
-		attachOnSims = u.Sims()
-		simForWorld = simByName(u.Sims())
-		if dbStore, ok := st.(*store.Store); ok {
-			for _, s := range u.Sims() {
-				restoreRootMemory(ctx, dbStore, s)
-			}
-		}
-		if cfg != nil {
-			yamlWebAddr = cfg.Web.Addr
-			yamlSaveMode = cfg.Save.Mode
-		}
-	case *brainSpec != "none":
-		embedder, err := buildEmbedder(*embedderSpec)
-		if err != nil {
-			return fmt.Errorf("build embedder: %w", err)
-		}
-		s, err := buildSim(w, *brainSpec, embedder, *importanceSpec, *reflectInterval, *maxAgents, *maxSpawnDepth)
-		if err != nil {
-			return fmt.Errorf("build sim: %w", err)
-		}
-		defer func() { _ = s.Close() }()
-		loop = s
-		simProvider = func() *sim.Sim { return s }
-		attachOnSims = []*sim.Sim{s}
-		simForWorld = simByName([]*sim.Sim{s})
-		if dbStore, ok := st.(*store.Store); ok {
-			restoreRootMemory(ctx, dbStore, s)
-		}
-	default:
-		return errors.New("serve: --brain=none is not supported (web viewer needs a sim to render)")
+	sc, err := buildServeComponents(ctx, w, st, runComponentOpts{
+		embedderSpec:  *embedderSpec,
+		configPath:    *configPath,
+		brainSpec:     *brainSpec,
+		importance:    *importanceSpec,
+		reflect:       *reflectInterval,
+		maxAgents:     *maxAgents,
+		maxSpawnDepth: *maxSpawnDepth,
+	})
+	if err != nil {
+		return err
 	}
+	defer sc.cleanup()
+	w = sc.world
 
-	if dbStore, ok := st.(*store.Store); ok && simForWorld != nil {
-		st = &fullSaver{store: dbStore, simForWorld: simForWorld}
+	if dbStore, ok := st.(*store.Store); ok && sc.simForWorld != nil {
+		st = &fullSaver{store: dbStore, simForWorld: sc.simForWorld}
 	}
 
 	resolvedWebAddr := *webAddr
 	if resolvedWebAddr == "" {
-		resolvedWebAddr = yamlWebAddr
+		resolvedWebAddr = sc.yamlWebAddr
 	}
 	if resolvedWebAddr == "" {
 		return errors.New("serve: --web-addr is required (set the flag or YAML 'web.addr')")
 	}
-	stop, err := startWebUI(ctx, resolvedWebAddr, simProvider, attachOnSims, nil, stderr)
+	stop, err := startWebUI(resolvedWebAddr, sc.simProvider, sc.attachOnSims, nil, stderr)
 	if err != nil {
 		return err
 	}
@@ -1381,52 +1562,17 @@ func cmdServe(args []string, stdout, stderr io.Writer) error {
 
 	resolvedSaveMode := *saveMode
 	if resolvedSaveMode == "" {
-		resolvedSaveMode = yamlSaveMode
+		resolvedSaveMode = sc.yamlSaveMode
 	}
-	mode, err := store.ParseSaveMode(resolvedSaveMode)
-	if err != nil {
+	if err := startAutosave(ctx, st, w, resolvedSaveMode, stderr); err != nil {
 		return err
 	}
-	if mode.Kind == "interval" {
-		concreteStore, ok := st.(store.Saver)
-		if !ok || concreteStore == nil {
-			return fmt.Errorf("save-mode interval requires --db; no store attached")
-		}
-		go func() {
-			err := store.RunAutosave(ctx, concreteStore, w, mode.Interval, func(saveErr error) {
-				_, _ = fmt.Fprintln(stderr, "autosave:", saveErr)
-			})
-			if err != nil && !errors.Is(err, context.Canceled) {
-				_, _ = fmt.Fprintln(stderr, "autosave:", err)
-			}
-		}()
-	}
 
-	ticker := time.NewTicker(*tickInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			// Best-effort final save so the work that's accumulated
-			// since the last autosave persists. Use a fresh context
-			// because the signal context is already done.
-			if st != nil {
-				saveCtx, cancelSave := context.WithTimeout(context.Background(), 5*time.Second)
-				if err := st.Save(saveCtx, w); err != nil {
-					_, _ = fmt.Fprintln(stderr, "final save:", err)
-				}
-				cancelSave()
-			}
-			return nil
-		case <-ticker.C:
-			if _, err := loop.Step(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				_, _ = fmt.Fprintln(stderr, "step:", err)
-			}
-		}
-	}
+	serveLoop(ctx, sc.loop, st, w, *tickInterval, stderr)
+	return nil
 }
 
-func writeHumanSummary(w io.Writer, s stepSummary) error {
+func writeHumanSummary(w io.Writer, s stepSummary) {
 	lines := []string{
 		fmt.Sprintf("world:                %s", s.World),
 		fmt.Sprintf("ticks:                %d", s.Ticks),
@@ -1450,8 +1596,7 @@ func writeHumanSummary(w io.Writer, s stepSummary) error {
 			lines = append(lines, fmt.Sprintf("  %-16s %d", n+":", s.ToolCounts[n]))
 		}
 	}
-	_, err := fmt.Fprintln(w, strings.Join(lines, "\n"))
-	return err
+	_, _ = fmt.Fprintln(w, strings.Join(lines, "\n"))
 }
 
 // replayAdapter wraps a *sim.Replay so the TUI can consume it via
@@ -1463,11 +1608,13 @@ func (a replayAdapter) Step(ctx context.Context) (tui.StepSummary, error) {
 	if errors.Is(err, sim.ErrReplayDone) {
 		// Treat completion as a skipped step so the TUI keeps
 		// rendering the final frame without erroring.
-		return tui.StepSummary{Tick: uint64(res.Tick), Skipped: true,
-			ToolResult: "replay complete"}, nil
+		return tui.StepSummary{
+			Tick: uint64(res.Tick), Skipped: true,
+			ToolResult: "replay complete",
+		}, nil
 	}
 	if err != nil {
-		return tui.StepSummary{}, err
+		return tui.StepSummary{}, fmt.Errorf("step: %w", err)
 	}
 	return tui.StepSummary{
 		Tick:       uint64(res.Tick),

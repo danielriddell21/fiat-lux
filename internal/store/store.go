@@ -58,7 +58,10 @@ func (s *Store) Close() error {
 	}
 	err := s.db.Close()
 	s.db = nil
-	return err
+	if err != nil {
+		return fmt.Errorf("store: close db: %w", err)
+	}
+	return nil
 }
 
 // Save writes the world's name, tick, and full event log to the
@@ -220,7 +223,10 @@ func (s *Store) ListWorlds(ctx context.Context) ([]string, error) {
 		}
 		out = append(out, n)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate world names: %w", err)
+	}
+	return out, nil
 }
 
 func marshalProps(p world.Properties) (string, error) {
@@ -229,7 +235,7 @@ func marshalProps(p world.Properties) (string, error) {
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("store: marshal props: %w", err)
 	}
 	return string(b), nil
 }
@@ -240,7 +246,7 @@ func unmarshalProps(s string) (world.Properties, error) {
 	}
 	var p world.Properties
 	if err := json.Unmarshal([]byte(s), &p); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("store: unmarshal props: %w", err)
 	}
 	return p, nil
 }

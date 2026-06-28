@@ -426,71 +426,8 @@ func (w *World) ApplyEventForLoad(e Event) error {
 	}
 	w.tick = e.Tick
 
-	switch e.Kind {
-	case EventTickStart:
-		// nothing to do beyond updating tick above
-	case EventCreate:
-		if e.EntityID == 0 {
-			return fmt.Errorf("world: create event has zero EntityID")
-		}
-		if _, exists := w.entities[e.EntityID]; exists {
-			return fmt.Errorf("world: create event %d collides with existing entity %d", e.ID, e.EntityID)
-		}
-		w.entities[e.EntityID] = &Entity{
-			ID:         e.EntityID,
-			TypeLabel:  e.TypeLabel,
-			Properties: e.Props.Clone(),
-			CreatedBy:  e.Agent,
-			CreatedAt:  e.Tick,
-		}
-	case EventModify:
-		ent, ok := w.entities[e.EntityID]
-		if !ok {
-			return fmt.Errorf("world: modify event %d targets unknown entity %d", e.ID, e.EntityID)
-		}
-		ent.Properties = ent.Properties.ApplyMergePatch(e.Props)
-	case EventDestroy:
-		ent, ok := w.entities[e.EntityID]
-		if !ok {
-			return fmt.Errorf("world: destroy event %d targets unknown entity %d", e.ID, e.EntityID)
-		}
-		t := e.Tick
-		ent.DestroyedAt = &t
-	case EventRelate:
-		if e.RelID == 0 {
-			return fmt.Errorf("world: relate event has zero RelID")
-		}
-		if _, exists := w.relationships[e.RelID]; exists {
-			return fmt.Errorf("world: relate event %d collides with existing relationship %d", e.ID, e.RelID)
-		}
-		w.relationships[e.RelID] = &Relationship{
-			ID:        e.RelID,
-			From:      e.From,
-			To:        e.To,
-			Kind:      e.RelKind,
-			CreatedBy: e.Agent,
-			CreatedAt: e.Tick,
-		}
-	case EventUnrelate:
-		rel, ok := w.relationships[e.RelID]
-		if !ok {
-			return fmt.Errorf("world: unrelate event %d targets unknown relationship %d", e.ID, e.RelID)
-		}
-		t := e.Tick
-		rel.DestroyedAt = &t
-	case EventDefineTool:
-		// Sim-layer state; the world records the event so the log
-		// stays the single source of truth, but does not interpret
-		// the macro definition itself.
-	case EventDie:
-		ent, ok := w.entities[e.EntityID]
-		if !ok {
-			return fmt.Errorf("world: die event %d targets unknown entity %d", e.ID, e.EntityID)
-		}
-		t := e.Tick
-		ent.DestroyedAt = &t
-	default:
-		return fmt.Errorf("world: unknown event kind %q", e.Kind)
+	if err := w.applyEventKind(e); err != nil {
+		return err
 	}
 
 	w.events = append(w.events, e.Clone())
@@ -503,5 +440,102 @@ func (w *World) ApplyEventForLoad(e Event) error {
 	if e.RelID >= w.nextRel {
 		w.nextRel = e.RelID + 1
 	}
+	return nil
+}
+
+// applyEventKind dispatches a persisted event to the handler for its
+// kind. Tick has already been set by the caller. Must be called with
+// w.mu held for writing.
+func (w *World) applyEventKind(e Event) error {
+	switch e.Kind {
+	case EventTickStart, EventDefineTool:
+		// EventTickStart needs only the tick update done by the caller;
+		// EventDefineTool is sim-layer state the world records but does
+		// not interpret.
+		return nil
+	case EventCreate:
+		return w.applyCreate(e)
+	case EventModify:
+		return w.applyModify(e)
+	case EventDestroy:
+		return w.markDestroyed(e, "destroy")
+	case EventDie:
+		return w.markDestroyed(e, "die")
+	case EventRelate:
+		return w.applyRelate(e)
+	case EventUnrelate:
+		return w.applyUnrelate(e)
+	default:
+		return fmt.Errorf("world: unknown event kind %q", e.Kind)
+	}
+}
+
+// applyCreate replays an entity creation event.
+func (w *World) applyCreate(e Event) error {
+	if e.EntityID == 0 {
+		return fmt.Errorf("world: create event has zero EntityID")
+	}
+	if _, exists := w.entities[e.EntityID]; exists {
+		return fmt.Errorf("world: create event %d collides with existing entity %d", e.ID, e.EntityID)
+	}
+	w.entities[e.EntityID] = &Entity{
+		ID:         e.EntityID,
+		TypeLabel:  e.TypeLabel,
+		Properties: e.Props.Clone(),
+		CreatedBy:  e.Agent,
+		CreatedAt:  e.Tick,
+	}
+	return nil
+}
+
+// applyModify replays a merge-patch event against an existing entity.
+func (w *World) applyModify(e Event) error {
+	ent, ok := w.entities[e.EntityID]
+	if !ok {
+		return fmt.Errorf("world: modify event %d targets unknown entity %d", e.ID, e.EntityID)
+	}
+	ent.Properties = ent.Properties.ApplyMergePatch(e.Props)
+	return nil
+}
+
+// markDestroyed soft-destroys the event's target entity. kind labels
+// the event ("destroy" or "die") for error messages.
+func (w *World) markDestroyed(e Event, kind string) error {
+	ent, ok := w.entities[e.EntityID]
+	if !ok {
+		return fmt.Errorf("world: %s event %d targets unknown entity %d", kind, e.ID, e.EntityID)
+	}
+	t := e.Tick
+	ent.DestroyedAt = &t
+	return nil
+}
+
+// applyRelate replays a relationship creation event.
+func (w *World) applyRelate(e Event) error {
+	if e.RelID == 0 {
+		return fmt.Errorf("world: relate event has zero RelID")
+	}
+	if _, exists := w.relationships[e.RelID]; exists {
+		return fmt.Errorf("world: relate event %d collides with existing relationship %d", e.ID, e.RelID)
+	}
+	w.relationships[e.RelID] = &Relationship{
+		ID:        e.RelID,
+		From:      e.From,
+		To:        e.To,
+		Kind:      e.RelKind,
+		CreatedBy: e.Agent,
+		CreatedAt: e.Tick,
+	}
+	return nil
+}
+
+// applyUnrelate replays a relationship soft-delete event.
+func (w *World) applyUnrelate(e Event) error {
+	rel, ok := w.relationships[e.RelID]
+	if !ok {
+		return fmt.Errorf("world: unrelate event %d targets unknown relationship %d", e.ID, e.RelID)
+	}
+	t := e.Tick
+	rel.DestroyedAt = &t
 	return nil
 }

@@ -345,39 +345,50 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	if m.interveneActive {
 		return m.handleInterveneChord(key)
 	}
+	if mm, cmd, ok := m.handleToggleKey(key); ok {
+		return mm, cmd
+	}
+	return m.handleActionKey(key)
+}
+
+// handleToggleKey handles the view/navigation keys: quit, panel
+// toggles, and focus/world cycling. ok is false when key matches none
+// of them, so the caller can try the action keys next.
+func (m Model) handleToggleKey(key string) (tea.Model, tea.Cmd, bool) {
 	switch {
 	case Matches(key, m.keys.Quit):
-		return m, tea.Quit
+		return m, tea.Quit, true
 	case Matches(key, m.keys.Help):
 		m.helpVisible = !m.helpVisible
-		return m, nil
 	case Matches(key, m.keys.MemoryToggle):
 		m.memoryVisible = !m.memoryVisible
-		return m, nil
 	case Matches(key, m.keys.LineageToggle):
 		m.lineageVisible = !m.lineageVisible
-		return m, nil
 	case Matches(key, m.keys.AnnalsToggle):
 		m.annalsVisible = !m.annalsVisible
-		return m, nil
+	case Matches(key, m.keys.FocusNext):
+		m.cycleFocus(+1)
+	case Matches(key, m.keys.FocusPrev):
+		m.cycleFocus(-1)
+	case Matches(key, m.keys.WorldNext):
+		m.cycleWorld(+1)
+	case Matches(key, m.keys.WorldPrev):
+		m.cycleWorld(-1)
+	case Matches(key, m.keys.TogglePause):
+		m.paused = !m.paused
+	default:
+		return m, nil, false
+	}
+	return m, nil, true
+}
+
+// handleActionKey handles the keys that trigger sim actions:
+// intervene, speed control, save, and the debug shortcuts.
+func (m Model) handleActionKey(key string) (tea.Model, tea.Cmd) {
+	switch {
 	case Matches(key, m.keys.Intervene):
 		m.interveneActive = true
 		return m.flash("intervene: c=create / d=destroy / s=speak / esc=cancel")
-	case Matches(key, m.keys.FocusNext):
-		m.cycleFocus(+1)
-		return m, nil
-	case Matches(key, m.keys.FocusPrev):
-		m.cycleFocus(-1)
-		return m, nil
-	case Matches(key, m.keys.WorldNext):
-		m.cycleWorld(+1)
-		return m, nil
-	case Matches(key, m.keys.WorldPrev):
-		m.cycleWorld(-1)
-		return m, nil
-	case Matches(key, m.keys.TogglePause):
-		m.paused = !m.paused
-		return m, nil
 	case Matches(key, m.keys.SpeedUp):
 		return m.adjustSpeed(2, 1)
 	case Matches(key, m.keys.SpeedDown):

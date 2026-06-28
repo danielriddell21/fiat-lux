@@ -285,13 +285,17 @@ func buildNarrator(ctx context.Context, factory BrainFactory, cfg NarratorConfig
 	if err != nil {
 		return nil, fmt.Errorf("narrator brain %q: %w", spec, err)
 	}
-	return narrator.New(narrator.Options{
+	n, err := narrator.New(narrator.Options{
 		Brain:            br,
 		SystemPrompt:     cfg.SystemPrompt,
 		IntervalTicks:    cfg.IntervalTicks,
 		MinEvents:        cfg.MinEvents,
 		MaxChapterLength: cfg.MaxChapterLength,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("build narrator: %w", err)
+	}
+	return n, nil
 }
 
 // loadOrNew consults the loader for a saved world; falls back to a
@@ -307,7 +311,11 @@ func loadOrNew(ctx context.Context, loader WorldLoader, name string) (*world.Wor
 			return nil, err
 		}
 	}
-	return world.New(name)
+	w, err := world.New(name)
+	if err != nil {
+		return nil, fmt.Errorf("new world: %w", err)
+	}
+	return w, nil
 }
 
 func closeAll(sims []*Sim) {

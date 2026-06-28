@@ -71,7 +71,7 @@ func RunAutosave(ctx context.Context, store Saver, w *world.World, interval time
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("autosave: %w", ctx.Err())
 		case <-ticker.C:
 			n := len(w.Events())
 			if n == lastSavedEvents {

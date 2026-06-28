@@ -8,6 +8,7 @@ package openaicompat
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/danielriddell21/fiat-lux/internal/imagegen/openai"
@@ -34,11 +35,15 @@ func New(opts Options) (*openai.Client, error) {
 	if opts.Model == "" {
 		return nil, errors.New("openaicompat imagegen: Model is required")
 	}
-	return openai.New(openai.Options{
+	c, err := openai.New(openai.Options{
 		BaseURL:    opts.BaseURL,
 		APIKey:     opts.APIKey,
 		Model:      opts.Model,
 		Size:       opts.Size,
 		HTTPClient: opts.HTTPClient,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("openaicompat imagegen: %w", err)
+	}
+	return c, nil
 }

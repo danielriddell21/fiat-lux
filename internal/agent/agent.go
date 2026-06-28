@@ -227,7 +227,11 @@ func (a *Agent) RetrieveMemories(ctx context.Context, query string, tick world.T
 	if k <= 0 {
 		k = 6
 	}
-	return a.Memory.Retrieve(ctx, query, tick, k, a.Embedder)
+	recs, err := a.Memory.Retrieve(ctx, query, tick, k, a.Embedder)
+	if err != nil {
+		return nil, fmt.Errorf("retrieve memories: %w", err)
+	}
+	return recs, nil
 }
 
 // BuildPerception assembles a Perception snapshot from the world.
