@@ -3,8 +3,8 @@
 > *Let there be light.*
 
 [![CI](https://github.com/danielriddell21/fiat-lux/actions/workflows/ci.yaml/badge.svg)](https://github.com/danielriddell21/fiat-lux/actions/workflows/ci.yaml)
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=danielriddell21_fiat-lux&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=danielriddell21_fiat-lux)
 [![codecov](https://codecov.io/gh/danielriddell21/fiat-lux/graph/badge.svg)](https://codecov.io/gh/danielriddell21/fiat-lux)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=danielriddell21_fiat-lux&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=danielriddell21_fiat-lux)
 [![Go 1.26](https://img.shields.io/badge/go-1.26-blue)](https://go.dev)
 [![MIT License](https://img.shields.io/badge/licence-MIT-green)](LICENSE)
 
