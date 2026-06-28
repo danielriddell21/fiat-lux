@@ -52,8 +52,7 @@ for Ollama, Anthropic, OpenAI, multi-world, and replay walkthroughs.
 brew install danielriddell21/tap/fiatlux
 ```
 
-## Docs
-
+## Documentation
 - [Quickstart](./docs/quickstart.md) — every supported brain and the
   multi-world / replay flows
 - [Architecture](./docs/architecture.md) — diagrams, the per-tick
