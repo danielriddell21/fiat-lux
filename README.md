@@ -33,8 +33,7 @@ reasoning and tool calls. Pause it. Scrub it. Replay it.
 - **Web viewer**: optional embedded HTTP server renders the kosmos as
   a live force-directed graph. Add `--web-addr 127.0.0.1:8080`.
 
-## Try it
-
+## Quick start
 ```bash
 git clone https://github.com/danielriddell21/fiat-lux
 cd fiat-lux
