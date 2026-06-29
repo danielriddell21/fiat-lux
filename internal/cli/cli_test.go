@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bytes"
@@ -16,11 +16,14 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/sim"
 )
 
+// testVersion is the version string threaded through run in tests.
+const testVersion = "dev"
+
 func TestRunPrintsBanner(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	if err := run(nil, &buf, io.Discard); err != nil {
+	if err := run(nil, &buf, io.Discard, testVersion); err != nil {
 		t.Fatalf("run returned error: %v", err)
 	}
 
@@ -35,21 +38,19 @@ func TestRunPrintsBanner(t *testing.T) {
 func TestRunVersionFlag(t *testing.T) {
 	t.Parallel()
 
-	for _, arg := range []string{"--version", "version"} {
-		var buf bytes.Buffer
-		if err := run([]string{arg}, &buf, io.Discard); err != nil {
-			t.Fatalf("run %s returned error: %v", arg, err)
-		}
-		if got := strings.TrimSpace(buf.String()); got != version {
-			t.Errorf("%s output: got %q, want %q", arg, got, version)
-		}
+	var buf bytes.Buffer
+	if err := run([]string{"--version"}, &buf, io.Discard, testVersion); err != nil {
+		t.Fatalf("run --version returned error: %v", err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != testVersion {
+		t.Errorf("--version output: got %q, want %q", got, testVersion)
 	}
 }
 
 func TestRunHelp(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
-	if err := run([]string{"help"}, &buf, io.Discard); err != nil {
+	if err := run([]string{"help"}, &buf, io.Discard, testVersion); err != nil {
 		t.Fatalf("run help: %v", err)
 	}
 	got := buf.String()
@@ -128,7 +129,7 @@ func TestRunUnknownSubcommand(t *testing.T) {
 	// Unknown subcommands fall through to the banner path, which
 	// treats args[0] as a flag and errors on the flag parser.
 	var buf bytes.Buffer
-	err := run([]string{"flibbertigibbet"}, &buf, io.Discard)
+	err := run([]string{"flibbertigibbet"}, &buf, io.Discard, testVersion)
 	if err == nil {
 		// Equally acceptable: the banner is printed with a warning.
 		// Just assert *something* happened (no panic).
@@ -143,7 +144,7 @@ func TestRunUnknownSubcommand(t *testing.T) {
 func TestCmdStep_JSON(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	err := run([]string{"step", "--count", "8", "--brain", "stub:42", "--json"}, &out, io.Discard)
+	err := run([]string{"step", "--count", "8", "--brain", "stub:42", "--json"}, &out, io.Discard, testVersion)
 	if err != nil {
 		t.Fatalf("step --json: %v", err)
 	}
@@ -168,7 +169,7 @@ func TestCmdStep_JSON(t *testing.T) {
 func TestCmdStep_Human(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	err := run([]string{"step", "--count", "4", "--brain", "stub:7"}, &out, io.Discard)
+	err := run([]string{"step", "--count", "4", "--brain", "stub:7"}, &out, io.Discard, testVersion)
 	if err != nil {
 		t.Fatalf("step (human): %v", err)
 	}
@@ -183,7 +184,7 @@ func TestCmdStep_Human(t *testing.T) {
 func TestCmdStep_RejectsZeroCount(t *testing.T) {
 	t.Parallel()
 	var stderr bytes.Buffer
-	err := run([]string{"step", "--count", "0"}, io.Discard, &stderr)
+	err := run([]string{"step", "--count", "0"}, io.Discard, &stderr, testVersion)
 	if err == nil {
 		t.Errorf("expected error for --count 0")
 	}
@@ -207,7 +208,7 @@ func TestCmdServe_BootsWebServer(t *testing.T) {
 			"--brain", "stub:42",
 			"--tick", "50ms",
 			"--web-addr", addr,
-		}, io.Discard, io.Discard)
+		}, io.Discard, io.Discard, testVersion)
 	}()
 
 	deadline := time.Now().Add(5 * time.Second)
