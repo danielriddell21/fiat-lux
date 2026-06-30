@@ -25,15 +25,10 @@ test:
 lint:
     golangci-lint run
 
-# vet the code.
-[group('dev')]
-vet:
-    go vet ./...
-
 # format the code.
 [group('dev')]
 fmt:
-    gofmt -w .
+    golangci-lint fmt
 
 # resolve dependencies.
 [group('dev')]
