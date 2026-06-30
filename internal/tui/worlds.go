@@ -5,9 +5,6 @@ import (
 	"strings"
 )
 
-// RenderWorldsStrip renders a one-line summary of the world roster
-// with the focused world highlighted. Shown above the agent strip
-// when a multi-world Universe is attached.
 func RenderWorldsStrip(worlds []WorldInfo, focused int, s Styles) string {
 	if len(worlds) < 2 {
 		return ""

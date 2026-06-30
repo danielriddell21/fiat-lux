@@ -7,17 +7,10 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/brain/openai"
 )
 
-// DefaultBaseURL is the conventional Ollama OpenAI-compatible
-// endpoint. Ollama exposes `/v1/chat/completions` alongside its
-// native `/api/chat`; we use the OpenAI-shaped one so the same
-// client supports both native tool calling and JSON-mode fallback.
 const DefaultBaseURL = "http://localhost:11434/v1"
 
-// DefaultModel is the default local model.
 const DefaultModel = "qwen3:8b"
 
-// Options configures an Ollama Brain. Defaults match a vanilla
-// `ollama serve` on localhost.
 type Options struct {
 	BaseURL      string
 	Model        string
@@ -25,9 +18,6 @@ type Options struct {
 	HTTPClient   *http.Client
 }
 
-// New constructs a Brain talking to Ollama's OpenAI-compatible
-// chat completions endpoint. The returned brain is *openai.Brain so
-// callers can use it interchangeably.
 func New(opts Options) (*openai.Brain, error) {
 	baseURL := opts.BaseURL
 	if baseURL == "" {

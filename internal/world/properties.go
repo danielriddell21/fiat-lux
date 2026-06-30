@@ -5,20 +5,8 @@ import (
 	"fmt"
 )
 
-// Properties is an entity's agent-authored property bag. The
-// simulation never interprets the contents - meaning belongs to the
-// agent. Values are JSON-shaped: strings, numbers (float64 after
-// round-tripping), booleans, nil, []any, or nested map[string]any.
-//
-// reason: properties are arbitrary agent-authored JSON; their schema
-// is by design not knowable in advance, so map[string]any is the
-// right representation.
 type Properties map[string]any
 
-// Clone returns a deep copy of p via a JSON round-trip. Numeric
-// values become float64 (standard JSON behaviour); since the
-// simulation does not interpret values this is acceptable and
-// guarantees structural isolation.
 func (p Properties) Clone() Properties {
 	if p == nil {
 		return nil
@@ -37,13 +25,6 @@ func (p Properties) Clone() Properties {
 	return out
 }
 
-// ApplyMergePatch applies an RFC 7396 JSON Merge Patch to p,
-// returning the merged result. The original p is not modified.
-//
-// Semantics:
-//   - if patch[k] is nil, k is deleted from the result
-//   - if patch[k] and p[k] are both maps, they are merged recursively
-//   - otherwise patch[k] replaces p[k] wholesale
 func (p Properties) ApplyMergePatch(patch Properties) Properties {
 	merged := p.Clone()
 	if merged == nil {

@@ -5,8 +5,6 @@ import (
 	"strings"
 )
 
-// RenderAnnals renders the narrator's chapter log. Empty input
-// produces a placeholder.
 func RenderAnnals(chapters []ChapterSummary, s Styles) string {
 	var b strings.Builder
 	b.WriteString(s.PaneTitle.Render("annals"))

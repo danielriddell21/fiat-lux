@@ -11,7 +11,6 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// fakeSaver records every Save call.
 type fakeSaver struct {
 	mu       sync.Mutex
 	count    atomic.Int64

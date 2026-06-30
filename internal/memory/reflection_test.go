@@ -9,8 +9,6 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// fakeBrain captures the perception it received and returns a
-// scripted Decision.
 type fakeBrain struct {
 	seen    brain.Perception
 	thought string

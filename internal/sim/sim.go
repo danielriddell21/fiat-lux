@@ -19,91 +19,55 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// ErrNoBrain is returned when Step is called and there is no agent
-// with a brain attached.
 var ErrNoBrain = errors.New("sim: no agent has a brain")
 
-// ErrAgentCap is returned when SpawnAgent would push the world
-// past Options.MaxAgents.
 var ErrAgentCap = errors.New("sim: max agents per world reached")
 
-// ErrSpawnDepth is returned when SpawnAgent would push the spawn
-// graph past Options.MaxSpawnDepth.
 var ErrSpawnDepth = errors.New("sim: max spawn depth reached")
 
-// BrainFactory constructs a Brain from an agent-supplied spec
-// string. The cmd/fiatlux package supplies one that understands
-// stub/anthropic/openai/ollama/openaicompat configs; tests can
-// provide a simpler one. Returning nil with a nil error rejects
-// the spec; the spawn is refused.
 type BrainFactory func(ctx context.Context, spec string) (brain.Brain, error)
 
-// Sim is the multi-agent orchestrator. It holds one world and N
-// agents; Step picks the next agent round-robin and advances the
-// world tick when the cycle wraps.
 type Sim struct {
 	mu sync.Mutex
 
 	World *world.World
 
-	// agents is ordered; nextIdx points at the agent that will act
-	// on the next Step call. Insertion order is stable so focus
-	// cycling in the TUI matches spawn order.
 	agents     []*agent.Agent
 	nextIdx    int
 	perAgentRT map[world.EntityID]*agentRuntime
 
 	Observer func(StepResult)
 
-	// brainFactory is consulted by SpawnAgent calls to construct a
-	// child agent's brain from its spec string. Nil disables
-	// SpawnAgent (it returns an explanatory error to the agent).
 	brainFactory BrainFactory
 
-	// Defaults inherited by spawned agents when their SpawnAgent
-	// call doesn't override them.
 	defaultEmbedder        memory.Embedder
 	defaultImportance      memory.Importance
 	defaultReflectInterval uint64
 	defaultSystemPrompt    string
 	tools                  *tools.Registry
 
-	// Safety knobs.
 	maxAgents     int
 	maxSpawnDepth int
 
-	// Per-world write serialisation lives on world.World already
-	// (per-world RWMutex); spawn-time bookkeeping is serialised
-	// here on Sim.mu.
-
-	// multimodal, when non-nil, attaches generated images to Create
-	// events asynchronously. Nil keeps the sim image-free.
 	multimodal *MultimodalOptions
 	imageWG    sync.WaitGroup
 
-	// narrator and annals: optional read-only chronicler.
 	narrator     *narrator.Narrator
 	annals       []narrator.Chapter
 	narratorBusy bool
 }
 
-// agentRuntime holds the per-agent state the sim tracks alongside
-// the agent itself.
 type agentRuntime struct {
 	lastIdle  bool
 	reflector *memory.Reflector
-	// spawnedBy holds the EntityID of the parent agent, used by
-	// SpawnAgent depth checks. Zero for the root creator.
+
 	spawnedBy world.EntityID
-	// macros is the agent's runtime-defined macro set. Always
-	// non-nil after registerAgent.
+
 	macros *macros.Set
-	// dead is set once the agent has called Die. Dead agents are
-	// skipped by Step but remain in the roster for TUI continuity.
+
 	dead bool
 }
 
-// StepResult is a structured summary of one Step.
 type StepResult struct {
 	Tick        world.Tick
 	Skipped     bool
@@ -117,98 +81,51 @@ type StepResult struct {
 	Reflections []string
 }
 
-// Options configures a new Sim.
 type Options struct {
-	// World is required.
 	World *world.World
 
-	// Brain is required: the root agent's brain.
 	Brain brain.Brain
 
-	// Tools defaults to tools.Default() when nil.
 	Tools *tools.Registry
 
-	// AgentName is the spawn-time display name of the root agent.
-	// Defaults to "the creator".
 	AgentName string
 
-	// SystemPrompt is the static instruction prepended to every
-	// brain call. Defaults to the canonical fiat-lux prompt.
 	SystemPrompt string
 
-	// Memory, when non-nil, is the root agent's memory stream.
-	// Each spawned agent always gets its own fresh stream.
 	Memory *memory.Stream
 
-	// Embedder, Importance: defaults inherited by spawned agents.
 	Embedder   memory.Embedder
 	Importance memory.Importance
 
-	// ReflectInterval triggers a reflection pass every N ticks.
-	// Inherited by spawned agents.
 	ReflectInterval uint64
 
-	// BrainFactory is invoked by SpawnAgent to build a child's
-	// brain from its agent-supplied config string. Nil disables
-	// SpawnAgent.
 	BrainFactory BrainFactory
 
-	// MaxAgents caps total agents per world; 0 means 8 (a safe
-	// default).
 	MaxAgents int
 
-	// MaxSpawnDepth caps the spawn graph height; 0 means 3.
 	MaxSpawnDepth int
 
-	// Drives is the root agent's intrinsic motivational state, woven
-	// into every Perception. Nil means no drives are exposed. Spawned
-	// children inherit unless SpawnAgent overrides.
 	Drives drives.State
 
-	// Observer is an optional hook called with each StepResult.
 	Observer func(StepResult)
 
-	// Multimodal, when non-nil, attaches an image to every Create
-	// event whose properties carry at least MinPropsCount entries.
-	// The image is generated asynchronously and the entity is
-	// updated via World.Modify; replay does not regenerate.
 	Multimodal *MultimodalOptions
 
-	// Narrator, when non-nil, is a read-only meta-agent that
-	// writes chapters to the world's Annals log on a cadence the
-	// narrator's policy decides. Nil disables the feature.
 	Narrator *narrator.Narrator
 }
 
-// MultimodalOptions wires an image generator into the sim's Create
-// path. The struct lives in the sim package so callers don't have to
-// import internal/imagegen just to disable the feature.
 type MultimodalOptions struct {
-	// Generator is required. Nil disables image generation.
 	Generator imagegen.Generator
 
-	// Cache stores rendered bytes keyed by prompt hash. Nil disables
-	// caching - every Create hits the provider.
 	Cache *imagegen.Cache
 
-	// PromptBuilder maps (type_label, properties) to a prompt string.
-	// Nil uses imagegen.DefaultPromptBuilder.
 	PromptBuilder imagegen.PromptBuilder
 
-	// MinPropsCount gates generation: an entity whose Properties map
-	// has fewer than this many keys is skipped. Defaults to 1.
 	MinPropsCount int
 
-	// URLBase is prefixed to the image's stored path when writing
-	// image_url onto the entity. Defaults to "/api/image/" so the
-	// embedded webui serves it directly.
 	URLBase string
 }
 
-// DefaultSystemPrompt is the canonical instruction passed to the
-// root creator. It frames the soft "contains" convention, the
-// frontier the engine surfaces in perception, and the Zoom and
-// SpawnAgent tools the agent can use to drill into specific places.
 const DefaultSystemPrompt = `You exist. The world begins empty. You hold tools that let you create entities, relate them, and spawn agents. The simulation does not validate type_label, properties, or relationship kind — they are opaque strings that mean what you make them mean.
 
 Convention: a relationship with kind "contains" means the To entity is inside the From entity. The engine uses this only to surface where you can go deeper. A planet contains continents; a continent contains forests; a forest contains trees; a tree contains a squirrel. Build downward, not outward, unless the top is genuinely incomplete.
@@ -223,8 +140,6 @@ When a node you've focused on grows past several children, you may SpawnAgent wi
 
 Be brief: one tool call per turn with a one-sentence justification. Below is the current world state, your recent memories, and your frontier.`
 
-// New constructs a Sim, spawning the root creator as an entity in
-// the world and attaching it to the given brain.
 func New(opts Options) (*Sim, error) {
 	if opts.World == nil {
 		return nil, errors.New("sim: World is required")
@@ -292,7 +207,6 @@ func New(opts Options) (*Sim, error) {
 	return s, nil
 }
 
-// registration captures everything registerAgent needs.
 type registration struct {
 	name         string
 	systemPrompt string
@@ -308,10 +222,6 @@ type registration struct {
 	macros       *macros.Set
 }
 
-// registerAgent creates an entity in the world, builds an Agent
-// runtime, and adds it to the sim's roster. Caller holds s.mu when
-// called from SpawnAgent; the root creator from New does not hold
-// it yet but no concurrent access is possible at construction time.
 func (s *Sim) registerAgent(r registration) (*agent.Agent, error) {
 	props := world.Properties{
 		"name":          r.name,
@@ -371,8 +281,6 @@ func roleLabel(parent world.AgentID) string {
 	return "spawned"
 }
 
-// Agents returns the current agent roster in spawn order. Exposed
-// mainly for tests and the TUI's focus cycling.
 func (s *Sim) Agents() []*agent.Agent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -381,7 +289,6 @@ func (s *Sim) Agents() []*agent.Agent {
 	return out
 }
 
-// AgentByID returns the agent with the given EntityID, or nil.
 func (s *Sim) AgentByID(id world.EntityID) *agent.Agent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -393,11 +300,6 @@ func (s *Sim) AgentByID(id world.EntityID) *agent.Agent {
 	return nil
 }
 
-// RestoreMacros reattaches a previously-defined macro set to the
-// root agent. Used by the load path to rehydrate runtime-defined
-// tools across sessions. Each macro is validated against the root's
-// tool registry; invalid entries are skipped silently so a stale
-// store cannot break startup.
 func (s *Sim) RestoreMacros(set *macros.Set) {
 	if set == nil {
 		return
@@ -418,8 +320,6 @@ func (s *Sim) RestoreMacros(set *macros.Set) {
 	}
 }
 
-// RootMacros returns the root agent's current macro set. Useful for
-// inspection and tests; the returned set is a clone safe to mutate.
 func (s *Sim) RootMacros() *macros.Set {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -433,8 +333,6 @@ func (s *Sim) RootMacros() *macros.Set {
 	return rt.macros.Clone()
 }
 
-// IsDead reports whether the agent with the given EntityID has
-// called Die. Unknown IDs return false.
 func (s *Sim) IsDead(id world.EntityID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -442,27 +340,18 @@ func (s *Sim) IsDead(id world.EntityID) bool {
 	return rt != nil && rt.dead
 }
 
-// SetMultimodal swaps in (or clears, when nil) the multimodal
-// options after construction. The caller is responsible for not
-// racing this with concurrent Steps.
 func (s *Sim) SetMultimodal(opts *MultimodalOptions) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.multimodal = opts
 }
 
-// Multimodal returns the configured multimodal options, or nil when
-// image generation is disabled.
 func (s *Sim) Multimodal() *MultimodalOptions {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.multimodal
 }
 
-// SetNarrator swaps in (or clears, when nil) the chronicler after
-// construction. The previously-installed narrator, if any, is closed
-// so its brain releases resources. Caller must NOT race this with
-// concurrent Steps.
 func (s *Sim) SetNarrator(n *narrator.Narrator) {
 	s.mu.Lock()
 	prev := s.narrator
@@ -473,9 +362,6 @@ func (s *Sim) SetNarrator(n *narrator.Narrator) {
 	}
 }
 
-// Step picks the next agent in round-robin order and runs one
-// decision cycle for it. The world tick advances when the cycle
-// wraps back to the first agent.
 func (s *Sim) Step(ctx context.Context) (StepResult, error) {
 	s.mu.Lock()
 	if len(s.agents) == 0 {
@@ -566,8 +452,6 @@ func (s *Sim) stepAgent(ctx context.Context, ag *agent.Agent, rt *agentRuntime) 
 	return res, nil
 }
 
-// maybeReflect runs the agent's reflector when it is due, folding any
-// new reflections and token usage into res.
 func (s *Sim) maybeReflect(ctx context.Context, ag *agent.Agent, rt *agentRuntime, tick world.Tick, res *StepResult) {
 	if rt.reflector == nil || !rt.reflector.ShouldReflect(tick) {
 		return
@@ -586,11 +470,6 @@ func (s *Sim) maybeReflect(ctx context.Context, ag *agent.Agent, rt *agentRuntim
 	}
 }
 
-// invokeTool dispatches the agent's chosen tool. SpawnAgent, Speak,
-// DefineTool, Die, Zoom, and Unzoom are intercepted here because
-// they need access to per-world or per-agent state the registry
-// cannot reach. Macro calls are expanded against the agent's macro
-// set and recursively dispatched.
 func (s *Sim) invokeTool(ctx context.Context, ag *agent.Agent, call brain.ToolCall, tick world.Tick) (string, error) {
 	switch call.Name {
 	case "SpawnAgent":
@@ -622,9 +501,6 @@ func (s *Sim) invokeTool(ctx context.Context, ag *agent.Agent, call brain.ToolCa
 	return out, nil
 }
 
-// invokeExpanded runs an ordered list of primitive (or further
-// macro) tool calls, stopping on the first error. Returns a combined
-// human-readable result for the agent's memory stream.
 func (s *Sim) invokeExpanded(ctx context.Context, ag *agent.Agent, macroName string, calls []brain.ToolCall, tick world.Tick) (string, error) {
 	results := make([]string, 0, len(calls))
 	for i, c := range calls {
@@ -641,9 +517,6 @@ func (s *Sim) invokeExpanded(ctx context.Context, ag *agent.Agent, macroName str
 	return summary, nil
 }
 
-// runtimeFor returns the per-agent runtime block for the given
-// entity. Caller must NOT hold s.mu. Returns nil if the agent has
-// no registered runtime.
 func (s *Sim) runtimeFor(id world.EntityID) *agentRuntime {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -690,9 +563,6 @@ func (s *Sim) handleDefineTool(ag *agent.Agent, raw json.RawMessage) (string, er
 	return fmt.Sprintf("defined tool %q (%d step(s))", m.Name, len(m.Steps)), nil
 }
 
-// primitiveToolNameSet returns the names of every tool the agent
-// can directly invoke - excluding the DefineTool sentinel itself so
-// macros cannot include DefineTool steps.
 func primitiveToolNameSet(reg *tools.Registry) map[string]struct{} {
 	if reg == nil {
 		return nil
@@ -775,14 +645,6 @@ func (s *Sim) handleSpawn(ctx context.Context, parent *agent.Agent, raw json.Raw
 		child.Name, child.EntityID, spec), nil
 }
 
-// brainSpecFromConfig extracts a brain spec string from the
-// SpawnAgentArgs.BrainConfig map. We accept either:
-//
-//	{"spec": "anthropic:claude-haiku-4-5"}    explicit
-//	{"provider": "stub"}                       provider only
-//	{"provider": "anthropic", "model": "..."}  pair
-//
-// The provider/model form is more convenient for an LLM to emit.
 func brainSpecFromConfig(cfg map[string]any) string {
 	if cfg == nil {
 		return "stub"
@@ -830,9 +692,6 @@ func (s *Sim) handleSpeak(speaker *agent.Agent, raw json.RawMessage, tick world.
 	return fmt.Sprintf("spoke to %d listener(s): %s", len(others), a.Content), nil
 }
 
-// defaultZoomTurns is used when the agent requests Zoom without
-// supplying a turns argument. maxZoomTurns caps the value the agent
-// may request so a single Zoom can't monopolise focus indefinitely.
 const (
 	defaultZoomTurns = 5
 	maxZoomTurns     = 20
@@ -912,7 +771,6 @@ func (s *Sim) publish(res StepResult) {
 	}
 }
 
-// Close releases every attached brain. Safe to call once.
 func (s *Sim) Close() error {
 	s.imageWG.Wait()
 	s.mu.Lock()
@@ -934,9 +792,6 @@ func (s *Sim) Close() error {
 	return firstErr
 }
 
-// buildMemoryQuery is the stable string the sim hashes into a query
-// embedding. It captures the rough shape of the agent's current
-// situation so semantically related past memories surface.
 func buildMemoryQuery(w *world.World, since world.EventID) string {
 	ents := w.Entities()
 	types := make(map[string]int, 8)
@@ -965,9 +820,6 @@ func buildMemoryQuery(w *world.World, since world.EventID) string {
 	return memory.SummariseQuery(len(ents), append(typeParts, recent...))
 }
 
-// Agent is the root creator. Exposed as a property for backward
-// compatibility with callers that still expect a single-agent Sim.
-// The TUI's focus model uses Agents() instead.
 func (s *Sim) Agent() *agent.Agent {
 	s.mu.Lock()
 	defer s.mu.Unlock()

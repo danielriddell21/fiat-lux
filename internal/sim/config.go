@@ -14,75 +14,39 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// Config is the YAML-deserialised multi-world configuration. The
-// production form lives in examples/cloud-haiku.yaml and
-// examples/local-qwen.yaml.
 type Config struct {
 	Worlds          []WorldConfig `yaml:"worlds"`
 	ReflectInterval uint64        `yaml:"reflect_interval,omitempty"`
 	MaxAgents       int           `yaml:"max_agents,omitempty"`
 	MaxSpawnDepth   int           `yaml:"max_spawn_depth,omitempty"`
 
-	// Web configures the optional in-process web viewer. When Addr is
-	// non-empty the CLI starts an HTTP server at that address alongside
-	// the TUI. The --web-addr CLI flag takes precedence when both set.
 	Web WebConfig `yaml:"web,omitempty"`
 
-	// Save configures persistence cadence. Empty / "manual" means the
-	// user presses 's' to save (legacy behaviour). The --save-mode CLI
-	// flag takes precedence when both set.
 	Save SaveConfig `yaml:"save,omitempty"`
 
-	// Multimodal, when set, attaches an image generator to every
-	// world. The --multimodal CLI flag takes precedence when both
-	// are supplied; the --image-cache flag overrides CacheDir.
 	Multimodal MultimodalConfig `yaml:"multimodal,omitempty"`
 }
 
-// WebConfig is the YAML form of the web viewer options.
 type WebConfig struct {
-	// Addr is the listen address, e.g. ":8080" or "127.0.0.1:8080".
-	// Empty disables the web viewer.
 	Addr string `yaml:"addr,omitempty"`
 }
 
-// SaveConfig controls how frequently the world is persisted.
 type SaveConfig struct {
-	// Mode is parsed by store.ParseSaveMode. Accepted forms:
-	//   "" / "manual"         - user-triggered save only (default)
-	//   "interval:<duration>" - periodic background save, e.g. "30s"
 	Mode string `yaml:"mode,omitempty"`
 }
 
-// MultimodalConfig is the YAML form of the image generator options.
-// An empty Provider disables image generation.
 type MultimodalConfig struct {
-	// Provider selects the generator. Accepted: "openai" |
-	// "openaicompat". Empty disables.
 	Provider string `yaml:"provider,omitempty"`
 
-	// Model is the image model name (e.g. "gpt-image-1", "dall-e-3",
-	// or a local server's model id). Optional for "openai".
 	Model string `yaml:"model,omitempty"`
 
-	// BaseURL is required for "openaicompat" and ignored for
-	// "openai".
 	BaseURL string `yaml:"base_url,omitempty"`
 
-	// CacheDir overrides the default on-disk cache location
-	// ($XDG_CACHE_HOME/fiatlux/images). The --image-cache CLI flag
-	// takes precedence when both are set.
 	CacheDir string `yaml:"cache_dir,omitempty"`
 
-	// MinPropsCount skips image generation for entities with fewer
-	// than this many properties. Zero defaults to 1.
 	MinPropsCount int `yaml:"min_props_count,omitempty"`
 }
 
-// Spec returns the CLI-equivalent --multimodal spec for this config,
-// or "" when the provider is empty (disabled). The string is
-// suitable for handing to the same parser the --multimodal flag
-// uses, so YAML and CLI paths converge.
 func (m MultimodalConfig) Spec() string {
 	switch m.Provider {
 	case "":
@@ -102,15 +66,12 @@ func (m MultimodalConfig) Spec() string {
 	}
 }
 
-// WorldConfig is one world's spec.
 type WorldConfig struct {
 	Name     string         `yaml:"name"`
 	Agent    AgentConfig    `yaml:"agent"`
 	Narrator NarratorConfig `yaml:"narrator,omitempty"`
 }
 
-// NarratorConfig configures the per-world chronicler. Empty Brain
-// disables the narrator.
 type NarratorConfig struct {
 	Brain            BrainConfig `yaml:"brain"`
 	IntervalTicks    uint64      `yaml:"interval_ticks,omitempty"`
@@ -119,7 +80,6 @@ type NarratorConfig struct {
 	SystemPrompt     string      `yaml:"system_prompt,omitempty"`
 }
 
-// AgentConfig is the root agent's spec for a world.
 type AgentConfig struct {
 	Name         string             `yaml:"name,omitempty"`
 	SystemPrompt string             `yaml:"system_prompt,omitempty"`
@@ -127,15 +87,12 @@ type AgentConfig struct {
 	Drives       map[string]float64 `yaml:"drives,omitempty"`
 }
 
-// BrainConfig captures provider + model. Spec is an alternative
-// form: a full string like "anthropic:claude-haiku-4-5".
 type BrainConfig struct {
 	Spec     string `yaml:"spec,omitempty"`
 	Provider string `yaml:"provider,omitempty"`
 	Model    string `yaml:"model,omitempty"`
 }
 
-// resolveSpec returns the brain spec string used by BrainFactory.
 func (b BrainConfig) resolveSpec() string {
 	if b.Spec != "" {
 		return b.Spec
@@ -149,7 +106,6 @@ func (b BrainConfig) resolveSpec() string {
 	return b.Provider + ":" + b.Model
 }
 
-// LoadYAML parses a Config from the reader.
 func LoadYAML(r io.Reader) (*Config, error) {
 	buf, err := io.ReadAll(r)
 	if err != nil {
@@ -165,8 +121,6 @@ func LoadYAML(r io.Reader) (*Config, error) {
 	return &c, nil
 }
 
-// Validate checks that the config is internally consistent before
-// the universe is built.
 func (c *Config) Validate() error {
 	if len(c.Worlds) == 0 {
 		return errors.New("sim: config has no worlds")
@@ -207,15 +161,8 @@ func (m MultimodalConfig) validate() error {
 	}
 }
 
-// WorldLoader returns a pre-existing world by name. BuildUniverse
-// calls it for each configured world; nil or an error means the
-// universe falls back to creating a fresh world.
 type WorldLoader func(ctx context.Context, name string) (*world.World, error)
 
-// BuildUniverse turns a Config into a Universe by constructing one
-// Sim per world. The embedder is shared so all worlds use the same
-// embedding pipeline. When loader is non-nil it is consulted first
-// for each world so saved state is preserved across runs.
 func (c *Config) BuildUniverse(
 	ctx context.Context,
 	factory BrainFactory,
@@ -270,9 +217,6 @@ func (c *Config) BuildUniverse(
 	return NewUniverse(sims)
 }
 
-// buildNarrator constructs a narrator from its YAML config slice.
-// Returns nil with no error when the config has no brain spec
-// (narrator disabled for that world).
 func buildNarrator(ctx context.Context, factory BrainFactory, cfg NarratorConfig) (*narrator.Narrator, error) {
 	spec := cfg.Brain.resolveSpec()
 	if spec == "" || spec == "stub" && cfg.Brain.Provider == "" {
@@ -298,9 +242,6 @@ func buildNarrator(ctx context.Context, factory BrainFactory, cfg NarratorConfig
 	return n, nil
 }
 
-// loadOrNew consults the loader for a saved world; falls back to a
-// fresh empty world when no loader is supplied or the lookup yields
-// no result. Any non-nil error from the loader is returned verbatim.
 func loadOrNew(ctx context.Context, loader WorldLoader, name string) (*world.World, error) {
 	if loader != nil {
 		w, err := loader(ctx, name)

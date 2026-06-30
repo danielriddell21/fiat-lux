@@ -10,15 +10,6 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// maybeGenerateImage finds the most recent EventCreate authored by
-// the given agent and (if multimodal is enabled and the entity's
-// property count clears the threshold) kicks off an async image
-// generation. The follow-up world.Modify writes image_url back onto
-// the entity; replay reads the URL from the modified state without
-// re-rendering.
-//
-// sinceEvent is the agent's previous high-water mark so we don't
-// pick up stale Creates from prior ticks.
 func (s *Sim) maybeGenerateImage(by world.EntityID, sinceEvent world.EventID) {
 	if s.multimodal == nil || s.multimodal.Generator == nil {
 		return
@@ -55,8 +46,6 @@ func (s *Sim) maybeGenerateImage(by world.EntityID, sinceEvent world.EventID) {
 	}()
 }
 
-// findRecentCreate returns the most recent EventCreate authored by the
-// given agent with an ID past sinceEvent, or nil if there is none.
 func findRecentCreate(events []world.Event, by world.EntityID, sinceEvent world.EventID) *world.Event {
 	for i := len(events) - 1; i >= 0; i-- {
 		ev := events[i]
@@ -70,9 +59,6 @@ func findRecentCreate(events []world.Event, by world.EntityID, sinceEvent world.
 	return nil
 }
 
-// renderImage resolves the image bytes for prompt, returning true when
-// a URL should be attached. A cache hit short-circuits the API call; a
-// cache miss generates and (best-effort) caches the result.
 func (s *Sim) renderImage(cache *imagegen.Cache, gen imagegen.Generator, prompt string) bool {
 	if cache != nil {
 		if _, err := cache.Get(prompt); err == nil {
@@ -96,8 +82,6 @@ func (s *Sim) renderImage(cache *imagegen.Cache, gen imagegen.Generator, prompt 
 	return true
 }
 
-// attachImageURL patches the entity's properties with the image URL.
-// The follow-up EventModify is what survives replay.
 func (s *Sim) attachImageURL(id world.EntityID, url string) {
 	patch := world.Properties{"image_url": url}
 	if err := s.World.Modify(world.NoAgent, id, patch); err != nil {
@@ -106,6 +90,4 @@ func (s *Sim) attachImageURL(id world.EntityID, url string) {
 	}
 }
 
-// WaitForImages blocks until all in-flight image goroutines have
-// finished. Useful for tests; production paths can rely on Close.
 func (s *Sim) WaitForImages() { s.imageWG.Wait() }

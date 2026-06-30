@@ -5,10 +5,6 @@ import (
 	"strings"
 )
 
-// RenderReasoning renders the reasoning pane. When a sim is attached
-// it shows the focused agent's most recent thought and chosen tool;
-// when no sim is wired (or no step has happened yet) it shows a
-// placeholder pointing at the keymap.
 func RenderReasoning(last StepSummary, simAttached bool, s Styles) string {
 	if !simAttached {
 		return s.Faint.Render("(no sim attached - press 'n' to add dummy entities)") +

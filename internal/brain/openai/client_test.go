@@ -13,8 +13,6 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/brain"
 )
 
-// fakeRT is a RoundTripper that synchronously serves a single
-// canned response and captures the inbound request for assertions.
 type fakeRT struct {
 	respBody   string
 	status     int
@@ -42,7 +40,6 @@ func (f *fakeRT) RoundTrip(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-// errRT returns the given error from every RoundTrip call.
 type errRT struct{ err error }
 
 func (e errRT) RoundTrip(_ *http.Request) (*http.Response, error) { return nil, e.err }

@@ -1,4 +1,3 @@
-// Package cli wires together the root Cobra command and all subcommands.
 package cli
 
 import (
@@ -51,14 +50,10 @@ const banner = `
   fiat-lux  -  let there be light
 `
 
-// Execute builds and runs the root command. Returns non-nil on error.
 func Execute(version string) error {
 	return run(os.Args[1:], os.Stdout, os.Stderr, version)
 }
 
-// run builds the Cobra command tree and dispatches args. stdout/stderr are
-// threaded through so tests can capture output. A nil/empty args slice prints
-// the banner.
 func run(args []string, stdout, stderr io.Writer, version string) error {
 	if args == nil {
 		args = []string{}
@@ -199,7 +194,6 @@ func cmdRun(stdout, stderr io.Writer) *cobra.Command {
 	return cmd
 }
 
-// runFlags holds the resolved flags for the run command.
 type runFlags struct {
 	worldName, dbPath, brainSpec  string
 	tickInterval                  time.Duration
@@ -298,8 +292,6 @@ func runRun(stdout, stderr io.Writer, fl runFlags) error {
 	return nil
 }
 
-// setupMultimodal builds the image generator from the resolved spec and attaches
-// it to each sim, returning the image cache for the web UI to serve.
 func setupMultimodal(sims []*sim.Sim, spec, cacheDir string, minProps int) (*imagegen.Cache, error) {
 	mmOpts, cache, err := buildMultimodal(spec, cacheDir)
 	if err != nil {
@@ -316,8 +308,6 @@ func setupMultimodal(sims []*sim.Sim, spec, cacheDir string, minProps int) (*ima
 	return cache, nil
 }
 
-// startAutosave parses the save mode and, for interval mode, launches the
-// background autosave loop. manual mode is a no-op.
 func startAutosave(ctx context.Context, st tui.Storer, w *world.World, saveMode string, stderr io.Writer) error {
 	mode, err := store.ParseSaveMode(saveMode)
 	if err != nil {
@@ -341,8 +331,6 @@ func startAutosave(ctx context.Context, st tui.Storer, w *world.World, saveMode 
 	return nil
 }
 
-// runComponentOpts carries the run flags that select and build the sim or
-// universe backing a `run` session.
 type runComponentOpts struct {
 	embedderSpec  string
 	configPath    string
@@ -353,8 +341,6 @@ type runComponentOpts struct {
 	maxSpawnDepth int
 }
 
-// runComponents holds the assembled stepper, web provider, and YAML-derived
-// defaults for a `run` session, plus a cleanup func to release them.
 type runComponents struct {
 	world            *world.World
 	stepper          tui.Stepper
@@ -369,8 +355,6 @@ type runComponents struct {
 	cleanup          func()
 }
 
-// buildRunComponents assembles a universe (from a YAML config) or a single sim
-// (from a brain spec), or neither when the brain is "none".
 func buildRunComponents(ctx context.Context, w *world.World, st tui.Storer, o runComponentOpts) (*runComponents, error) {
 	switch {
 	case o.configPath != "":
@@ -437,9 +421,6 @@ func buildSimComponents(ctx context.Context, w *world.World, st tui.Storer, o ru
 	}, nil
 }
 
-// startWebUI launches the embedded HTTP viewer and attaches its
-// broker to each sim's Observer. Returns a stop func the caller
-// must invoke before exiting so the listener releases its port.
 func startWebUI(addr string, provider webui.SimProvider, attachOn []*sim.Sim, imageCache *imagegen.Cache, stderr io.Writer) (func(), error) {
 	logger := log.New(stderr, "", log.LstdFlags)
 	server, err := webui.New(webui.Options{
@@ -481,17 +462,6 @@ func startWebUI(addr string, provider webui.SimProvider, attachOn []*sim.Sim, im
 	}, nil
 }
 
-// buildMultimodal parses --multimodal=<spec> into a MultimodalOptions
-// + on-disk Cache. Returns (nil, nil, nil) for "none". The cache is
-// shared between the sim (writes) and the web UI (reads).
-//
-// Specs:
-//
-//	none                                 - disabled (default)
-//	openai[:<model>]                     - OpenAI Images (env: OPENAI_API_KEY)
-//	openaicompat:<base_url>::<model>     - any OpenAI-compatible images endpoint
-//	                                       (LM Studio, llama.cpp, vLLM, openedai-images, ...).
-//	                                       APIKey is optional; set via OPENAI_API_KEY when needed.
 func buildMultimodal(spec, cacheDir string) (*sim.MultimodalOptions, *imagegen.Cache, error) {
 	if spec == "" || spec == "none" {
 		return nil, nil, nil
@@ -532,8 +502,6 @@ func buildMultimodal(spec, cacheDir string) (*sim.MultimodalOptions, *imagegen.C
 	}
 }
 
-// resolveImageCacheDir returns cacheDir, or a default under the user cache dir
-// (falling back to a temp dir) when it is empty.
 func resolveImageCacheDir(cacheDir string) string {
 	if cacheDir != "" {
 		return cacheDir
@@ -545,8 +513,6 @@ func resolveImageCacheDir(cacheDir string) string {
 	return filepath.Join(base, "fiatlux", "images")
 }
 
-// chainObservers composes two Sim.Observer-shaped callbacks. nil
-// callbacks are silently dropped.
 func chainObservers(a, b func(sim.StepResult)) func(sim.StepResult) {
 	if a == nil {
 		return b
@@ -560,12 +526,6 @@ func chainObservers(a, b func(sim.StepResult)) func(sim.StepResult) {
 	}
 }
 
-// applyNarratorOverride honours the --narrator CLI flag:
-//   - ""     keep whatever YAML configured (no-op)
-//   - "none" clear the narrator on every sim
-//   - any other string is treated as a brain spec; a fresh narrator
-//     is built for each sim with the package defaults for cadence
-//     (use YAML when finer control is needed).
 func applyNarratorOverride(spec string, sims []*sim.Sim) error {
 	switch spec {
 	case "":
@@ -591,16 +551,6 @@ func applyNarratorOverride(spec string, sims []*sim.Sim) error {
 	return nil
 }
 
-// buildSim wires up a Sim from the brain spec string. Supported specs:
-//
-//	stub                              - default; deterministic stub
-//	stub:<seed>                       - stub with explicit seed
-//	anthropic[:<model>]               - Anthropic Messages
-//	openai[:<model>]                  - OpenAI Chat Completions
-//	ollama[:<model>]                  - local Ollama (/v1)
-//	openaicompat:<base_url>::<model>  - any OpenAI-compatible endpoint
-//
-// "none" is handled by the caller (no sim attached).
 func buildSim(w *world.World, spec string, embedder memory.Embedder, importanceSpec string, reflectInterval uint64, maxAgents, maxSpawnDepth int) (*sim.Sim, error) {
 	br, err := buildBrain(spec)
 	if err != nil {
@@ -635,12 +585,6 @@ func buildSim(w *world.World, spec string, embedder memory.Embedder, importanceS
 	return s, nil
 }
 
-// buildEmbedder parses --embedder. Supported:
-//
-//	zero | (nothing)             zero-vector fallback; no relevance
-//	hash                         deterministic hash; for tests
-//	ollama[:<model>]             Ollama /api/embeddings; default nomic-embed-text
-//	openai[:<model>]             OpenAI /v1/embeddings; default text-embedding-3-small
 func buildEmbedder(spec string) (memory.Embedder, error) {
 	if spec == "" || spec == "zero" {
 		return memory.ZeroEmbedder{}, nil
@@ -775,9 +719,6 @@ func buildOpenAICompatBrain(tail string) (brain.Brain, error) {
 	return b, nil
 }
 
-// fullSaver implements tui.Storer by persisting both world events
-// and root-agent memory in a single Save call. It's what the TUI's
-// manual 's' binding and the autosave loop invoke.
 type fullSaver struct {
 	store       *store.Store
 	simForWorld func(name string) *sim.Sim
@@ -801,9 +742,6 @@ func (f *fullSaver) Save(ctx context.Context, w *world.World) error {
 	return nil
 }
 
-// simByName returns a closure that finds the sim whose world.Name()
-// matches the argument. Used by fullSaver to pair an incoming world
-// snapshot with the right sim's memory.
 func simByName(sims []*sim.Sim) func(string) *sim.Sim {
 	return func(name string) *sim.Sim {
 		for _, s := range sims {
@@ -815,12 +753,6 @@ func simByName(sims []*sim.Sim) func(string) *sim.Sim {
 	}
 }
 
-// restoreRootMemory pulls the root agent's saved memory records out
-// of the store and hands them to the freshly-built Stream, then
-// reattaches any runtime-defined macros recorded in the world event
-// log. The AgentID baked into restored records may not match the
-// new root's EntityID, but retrieval doesn't filter by AgentID so
-// this is harmless and keeps continuity across sessions.
 func restoreRootMemory(ctx context.Context, dbStore *store.Store, s *sim.Sim) {
 	if s == nil || s.World == nil {
 		return
@@ -837,9 +769,6 @@ func restoreRootMemory(ctx context.Context, dbStore *store.Store, s *sim.Sim) {
 	root.Memory.Restore(records)
 }
 
-// simAdapter bridges *sim.Sim to tui.Stepper / MemoryAccessor /
-// AgentLister - the TUI is kept independent of internal/sim so its
-// tests don't need the sim package.
 type simAdapter struct {
 	s       *sim.Sim
 	focusMu sync.Mutex
@@ -869,8 +798,6 @@ func (a *simAdapter) Step(ctx context.Context) (tui.StepSummary, error) {
 	}, nil
 }
 
-// Annals satisfies tui.AnnalsAccessor: forwards the sim's chapter
-// log into the TUI's projection.
 func (a *simAdapter) Annals() []tui.ChapterSummary {
 	chapters := a.s.Annals()
 	if len(chapters) == 0 {
@@ -883,7 +810,6 @@ func (a *simAdapter) Annals() []tui.ChapterSummary {
 	return out
 }
 
-// Agents satisfies tui.AgentLister.
 func (a *simAdapter) Agents() []tui.AgentInfo {
 	roster := a.s.Agents()
 	out := make([]tui.AgentInfo, len(roster))
@@ -912,9 +838,6 @@ func (a *simAdapter) SetFocusedAgentID(id uint64) {
 	a.focusMu.Unlock()
 }
 
-// InterveneCreate, InterveneDestroy, InterveneSpeak satisfy
-// tui.Interveneable. They forward to sim.Intervene under the
-// AgentIntervener sentinel.
 func (a *simAdapter) InterveneCreate(typeLabel string) (string, error) {
 	op := sim.Intervention{
 		Op:         sim.InterveneCreate,
@@ -943,8 +866,6 @@ func (a *simAdapter) InterveneSpeak(content string) (string, error) {
 	return "the void whispered to every agent", nil
 }
 
-// MemorySnapshot satisfies tui.MemoryAccessor: returns the focused
-// agent's memory stream.
 func (a *simAdapter) MemorySnapshot() tui.MemorySnapshot {
 	a.focusMu.Lock()
 	focused := a.focusID
@@ -978,10 +899,6 @@ func (a *simAdapter) MemorySnapshot() tui.MemorySnapshot {
 	return tui.MemorySnapshot{AgentName: ag.Name, Records: out}
 }
 
-// universeAdapter bridges *sim.Universe to tui.Stepper /
-// WorldProvider / UniverseLister / AgentLister / MemoryAccessor.
-// Focus state for agents is held per-world so each world remembers
-// its own selection across ctrl-tab swaps.
 type universeAdapter struct {
 	u            *sim.Universe
 	focusMu      sync.Mutex
@@ -1013,13 +930,10 @@ func (a *universeAdapter) Step(ctx context.Context) (tui.StepSummary, error) {
 	}, nil
 }
 
-// FocusedWorld satisfies tui.WorldProvider.
 func (a *universeAdapter) FocusedWorld() *world.World {
 	return a.u.Focused().World
 }
 
-// Worlds / FocusedWorldIdx / SetFocusedWorldIdx / CycleFocusedWorld
-// satisfy tui.UniverseLister.
 func (a *universeAdapter) Worlds() []tui.WorldInfo {
 	src := a.u.Worlds()
 	out := make([]tui.WorldInfo, len(src))
@@ -1036,7 +950,6 @@ func (a *universeAdapter) FocusedWorldIdx() int        { return a.u.FocusedIdx()
 func (a *universeAdapter) SetFocusedWorldIdx(i int)    { a.u.SetFocusedIdx(i) }
 func (a *universeAdapter) CycleFocusedWorld(delta int) { a.u.CycleFocus(delta) }
 
-// Annals satisfies tui.AnnalsAccessor, scoped to the focused world.
 func (a *universeAdapter) Annals() []tui.ChapterSummary {
 	chapters := a.u.Focused().Annals()
 	if len(chapters) == 0 {
@@ -1049,8 +962,6 @@ func (a *universeAdapter) Annals() []tui.ChapterSummary {
 	return out
 }
 
-// Agents / FocusedAgentID / SetFocusedAgentID satisfy
-// tui.AgentLister, scoped to the focused world.
 func (a *universeAdapter) Agents() []tui.AgentInfo {
 	focused := a.u.Focused()
 	roster := focused.Agents()
@@ -1080,8 +991,6 @@ func (a *universeAdapter) SetFocusedAgentID(id uint64) {
 	a.focusMu.Unlock()
 }
 
-// InterveneCreate, InterveneDestroy, InterveneSpeak satisfy
-// tui.Interveneable, scoped to the currently-focused world.
 func (a *universeAdapter) InterveneCreate(typeLabel string) (string, error) {
 	op := sim.Intervention{
 		Op:         sim.InterveneCreate,
@@ -1110,8 +1019,6 @@ func (a *universeAdapter) InterveneSpeak(content string) (string, error) {
 	return "the void whispered to every agent", nil
 }
 
-// MemorySnapshot satisfies tui.MemoryAccessor: returns the
-// currently-focused agent in the currently-focused world.
 func (a *universeAdapter) MemorySnapshot() tui.MemorySnapshot {
 	focused := a.FocusedAgentID()
 	roster := a.u.Focused().Agents()
@@ -1142,11 +1049,6 @@ func (a *universeAdapter) MemorySnapshot() tui.MemorySnapshot {
 	return tui.MemorySnapshot{AgentName: ag.Name, Records: out}
 }
 
-// loadUniverse opens the YAML config and builds a Universe from it.
-// When st implements the world-loader contract, each configured
-// world is restored from the store before the sim is wired so prior
-// state survives a restart. Also returns the parsed Config so
-// callers can read top-level settings (e.g. Web.Addr).
 func loadUniverse(ctx context.Context, path string, embedder memory.Embedder, st tui.Storer) (*sim.Universe, *sim.Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -1168,9 +1070,6 @@ func loadUniverse(ctx context.Context, path string, embedder memory.Embedder, st
 	return u, cfg, nil
 }
 
-// storeWorldLoader adapts a tui.Storer that also implements Load into
-// a sim.WorldLoader. Missing worlds become a (nil, nil) result so
-// BuildUniverse falls back to constructing a fresh empty world.
 func storeWorldLoader(st tui.Storer) sim.WorldLoader {
 	type worldLoader interface {
 		Load(ctx context.Context, name string) (*world.World, error)
@@ -1191,9 +1090,6 @@ func storeWorldLoader(st tui.Storer) sim.WorldLoader {
 	}
 }
 
-// cmdReplay opens a stored world's event log and walks it tick by
-// tick. The TUI watches a passive Stepper that applies one event
-// per tick interval; no brain is consulted.
 func cmdReplay(stdout, stderr io.Writer) *cobra.Command {
 	_ = stderr
 	cmd := &cobra.Command{
@@ -1249,7 +1145,6 @@ func cmdReplay(stdout, stderr io.Writer) *cobra.Command {
 	return cmd
 }
 
-// stepSummary is the headless-mode output document.
 type stepSummary struct {
 	World              string         `json:"world"`
 	Ticks              uint64         `json:"ticks"`
@@ -1264,9 +1159,6 @@ type stepSummary struct {
 	ElapsedMS          int64          `json:"elapsed_ms"`
 }
 
-// cmdStep runs the sim headlessly for --count steps and prints a
-// summary. No TUI, no /dev/tty required.
-// firstNonEmpty returns a when it is non-empty, otherwise b.
 func firstNonEmpty(a, b string) string {
 	if a != "" {
 		return a
@@ -1274,8 +1166,6 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
-// openStore opens the SQLite store at dbPath (empty = no store), returning the
-// storer and a close func the caller must defer.
 func openStore(ctx context.Context, dbPath string) (tui.Storer, func(), error) {
 	if dbPath == "" {
 		return nil, func() {}, nil
@@ -1287,8 +1177,6 @@ func openStore(ctx context.Context, dbPath string) (tui.Storer, func(), error) {
 	return s, func() { _ = s.Close() }, nil
 }
 
-// runSteps advances the stepper count times, accumulating a step summary and
-// pausing tickDelay between steps. It stops early on context cancellation.
 func runSteps(ctx context.Context, s stepper, count int, tickDelay time.Duration) (stepSummary, error) {
 	summary := stepSummary{ToolCounts: map[string]int{}}
 	start := time.Now()
@@ -1321,8 +1209,6 @@ func runSteps(ctx context.Context, s stepper, count int, tickDelay time.Duration
 	return summary, nil //nolint:nilerr // res.ToolErr is tallied in the summary, not propagated
 }
 
-// serveComponents holds the headless serve loop's stepper, web provider, and
-// YAML-derived defaults, plus a cleanup func.
 type serveComponents struct {
 	world        *world.World
 	loop         stepper
@@ -1334,8 +1220,6 @@ type serveComponents struct {
 	cleanup      func()
 }
 
-// buildServeComponents assembles the serve loop from a YAML universe or a single
-// sim. Unlike `run`, a brain of "none" is an error (the viewer needs a sim).
 func buildServeComponents(ctx context.Context, w *world.World, st tui.Storer, o runComponentOpts) (*serveComponents, error) {
 	switch {
 	case o.configPath != "":
@@ -1398,8 +1282,6 @@ func buildServeSim(ctx context.Context, w *world.World, st tui.Storer, o runComp
 	}, nil
 }
 
-// serveLoop drives the stepper on a ticker until the context is cancelled, then
-// makes a best-effort final save.
 func serveLoop(ctx context.Context, loop stepper, st tui.Storer, w *world.World, tickInterval time.Duration, stderr io.Writer) {
 	ticker := time.NewTicker(tickInterval)
 	defer ticker.Stop()
@@ -1416,8 +1298,6 @@ func serveLoop(ctx context.Context, loop stepper, st tui.Storer, w *world.World,
 	}
 }
 
-// finalSave persists the world with a fresh, short-lived context (the run's
-// context is already cancelled by the time this is called).
 func finalSave(st tui.Storer, w *world.World, stderr io.Writer) {
 	if st == nil {
 		return
@@ -1460,7 +1340,6 @@ func cmdStep(stdout, stderr io.Writer) *cobra.Command {
 	return cmd
 }
 
-// stepFlags holds the resolved flags for the step command.
 type stepFlags struct {
 	count                        int
 	worldName, dbPath, brainSpec string
@@ -1539,16 +1418,10 @@ func runStep(stdout io.Writer, fl stepFlags) error {
 	return nil
 }
 
-// stepper is the minimal interface implemented by both *sim.Sim and
-// *sim.Universe. cmdServe loops over it without depending on the
-// tui.Stepper adapter pair.
 type stepper interface {
 	Step(ctx context.Context) (sim.StepResult, error)
 }
 
-// cmdServe runs the sim headlessly with the embedded web viewer
-// attached. No TUI, no /dev/tty - this is the deployment-friendly
-// entrypoint that fits in a container behind a Cloudflare Tunnel.
 func cmdServe(stdout, stderr io.Writer) *cobra.Command {
 	_ = stdout
 	cmd := &cobra.Command{
@@ -1658,8 +1531,6 @@ func writeHumanSummary(w io.Writer, s stepSummary) {
 	_, _ = fmt.Fprintln(w, strings.Join(lines, "\n"))
 }
 
-// replayAdapter wraps a *sim.Replay so the TUI can consume it via
-// the existing Stepper / WorldProvider interfaces.
 type replayAdapter struct{ r *sim.Replay }
 
 func (a replayAdapter) Step(ctx context.Context) (tui.StepSummary, error) {
@@ -1685,9 +1556,6 @@ func (a replayAdapter) Step(ctx context.Context) (tui.StepSummary, error) {
 
 func (a replayAdapter) FocusedWorld() *world.World { return a.r.World }
 
-// loadOrNewWorld returns the named world from the store if it
-// exists, otherwise constructs a fresh empty one. With no store,
-// it always returns a fresh world.
 func loadOrNewWorld(ctx context.Context, st tui.Storer, name string) (*world.World, error) {
 	if loader, ok := st.(interface {
 		Load(ctx context.Context, name string) (*world.World, error)

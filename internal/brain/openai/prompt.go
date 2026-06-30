@@ -8,15 +8,6 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/brain"
 )
 
-// RenderPerception turns the agent's Perception into a compact JSON
-// payload the model can read. JSON is more reliable than prose for
-// our use - the model is asked to make a single tool call, and the
-// keys are stable and machine-readable.
-//
-// We deliberately keep the structure terse: no narrative scaffolding,
-// no examples. The system prompt instructs the model to issue at
-// most one tool call with a brief justification; the user message
-// is purely current state.
 func RenderPerception(p brain.Perception) string {
 	type rendered struct {
 		Tick          uint64              `json:"tick"`
@@ -167,14 +158,6 @@ type suggestionSummary struct {
 	Reason     string `json:"reason"`
 }
 
-// parseJSONFallback handles models that emit a tool call as plain
-// text (older Ollama / llama.cpp / vLLM variants without reliable
-// native tool calling). Expected shape:
-//
-//	{"tool":"<name>","args":{...}}  or
-//	{"name":"<name>","arguments":{...}}
-//
-// Returns nil, false if the content is not a valid fallback object.
 func parseJSONFallback(content string) (*brain.ToolCall, bool) {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" || trimmed[0] != '{' {

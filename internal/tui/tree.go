@@ -8,9 +8,6 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// Containment relationship kinds the tree uses to group children
-// under parents. Matched case-insensitively. Anything not matched is
-// rendered flat by entity type.
 var containmentKinds = map[string]struct{}{
 	"part of":   {},
 	"in":        {},
@@ -26,34 +23,18 @@ func isContainment(kind string) bool {
 	return ok
 }
 
-// TreeView is a serialisable representation of the creation tree.
-// Exposed as its own type so the renderer can be tested independently
-// of styling.
 type TreeView struct {
 	Roots []TreeNode `json:"roots"`
 }
 
-// TreeNode is one entry in the creation tree.
 type TreeNode struct {
 	ID        world.EntityID `json:"id"`
 	TypeLabel string         `json:"type"`
-	Name      string         `json:"name,omitempty"` // pulled from properties["name"] when present
+	Name      string         `json:"name,omitempty"`
 	Destroyed bool           `json:"destroyed,omitempty"`
 	Children  []TreeNode     `json:"children,omitempty"`
 }
 
-// BuildTreeView assembles a TreeView from a world snapshot. Entities
-// related by a containment kind ("part of", "in", "contains", etc.)
-// become parent/child pairs:
-//
-//   - "X part of Y", "X in Y", "X child of Y", "X member of Y",
-//     "X inside Y", "X within Y"  -> Y is parent, X is child
-//   - "X contains Y"              -> X is parent, Y is child
-//
-// Entities not appearing as a child in any containment relationship
-// are roots. Destroyed entities are included so the operator can see
-// what's been removed; relationships referencing destroyed entities
-// are ignored.
 func BuildTreeView(entities []world.Entity, rels []world.Relationship) TreeView {
 	parent := make(map[world.EntityID]world.EntityID, len(entities))
 	children := make(map[world.EntityID][]world.EntityID)
@@ -130,8 +111,6 @@ func extractName(p world.Properties) string {
 	return ""
 }
 
-// RenderTree turns a TreeView into a styled multi-line string. When
-// the world is empty it returns a styled placeholder.
 func RenderTree(v TreeView, s Styles) string {
 	if len(v.Roots) == 0 {
 		return s.Faint.Render("(void - nothing has been created yet)")

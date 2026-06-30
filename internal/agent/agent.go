@@ -16,9 +16,6 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// Tunables for the containment-aware perception. The frontier and
-// spawn-suggestion logic compute these every tick; keep the caps
-// small enough that the brain's prompt stays bounded on deep worlds.
 const (
 	frontierLeafCap              = 12
 	focusSubtreeCap              = 64
@@ -28,89 +25,43 @@ const (
 	maxSuggestionsPerTick        = 3
 )
 
-// Agent is the runtime brain attached to an agent-entity. It owns a
-// pointer to its Brain, the tool subset its creator granted it, and
-// its private memory stream.
 type Agent struct {
-	// EntityID is the agent's own entry in the world registry.
 	EntityID world.EntityID
 
-	// Name is the agent's display name; pulled from its entity's
-	// properties at spawn time.
 	Name string
 
-	// SystemPrompt is the static instruction prepended to every
-	// brain call.
 	SystemPrompt string
 
-	// Brain is the LLM-shaped decision-maker.
 	Brain brain.Brain
 
-	// Tools is the registry the agent may act through. May be a
-	// subset of the global catalogue per the creator's grant.
 	Tools *tools.Registry
 
-	// Memory is the Smallville-style memory stream. Records are
-	// appended after every step; top-K are retrieved into the
-	// next perception.
 	Memory *memory.Stream
 
-	// Embedder hashes text into embedding vectors for relevance
-	// retrieval. May be nil (zero-vector fallback).
 	Embedder memory.Embedder
 
-	// Importance scorer overrides the heuristic default. May be
-	// nil; memory.Add falls back to memory.HeuristicScorer.
 	Importance memory.Importance
 
-	// RetrieveK is how many records are pulled into each
-	// perception. Defaults to 6 when zero.
 	RetrieveK int
 
-	// SeenEventID tracks the highest event ID this agent has
-	// perceived. The next perception's RecentEvents include only
-	// events with ID > SeenEventID. Updated by the sim after each
-	// step.
 	SeenEventID world.EventID
 
-	// SpawnDepth is the number of ancestors between this agent and
-	// the root creator. Zero for the root agent; one for its direct
-	// children; etc. Used to enforce MaxSpawnDepth.
 	SpawnDepth int
 
-	// Focus is the EntityID the agent has pinned for drill-down via
-	// the Zoom tool, or zero when no focus is set. Cleared when the
-	// focused entity is destroyed or FocusTurnsLeft reaches zero.
 	Focus world.EntityID
 
-	// FocusTurnsLeft is the number of upcoming turns Focus remains
-	// pinned. Decremented at the end of each BuildPerception call;
-	// when it hits zero, Focus is cleared.
 	FocusTurnsLeft int
 
-	// suggestionsLastTick is keyed by EntityID and holds the tick at
-	// which a SpawnSuggestion was last emitted for that entity, used
-	// to dedupe nudges across consecutive BuildPerception calls.
 	suggestionsLastTick map[world.EntityID]uint64
 
-	// Drives is the agent's intrinsic motivational state, surfaced
-	// in every Perception. Nil for agents that opted out of drives;
-	// the framework does not interpret the keys.
 	Drives drives.State
 
-	// ParentEntityID is the EntityID of this agent's parent, or
-	// world.NoAgent for the root creator. Used by the lineage
-	// overlay and by Die's inheritance logic.
 	ParentEntityID world.EntityID
 
-	// inbox holds Heard events delivered by Speak from other
-	// agents in the same world. Drained into Perception.Heard by
-	// the sim on each step.
 	inbox   []brain.HeardEvent
 	inboxMu sync.Mutex
 }
 
-// New constructs an Agent. brain and tools must be non-nil.
 func New(entityID world.EntityID, name, systemPrompt string, br brain.Brain, reg *tools.Registry) (*Agent, error) {
 	if br == nil {
 		return nil, fmt.Errorf("agent: brain is required")
@@ -128,11 +79,6 @@ func New(entityID world.EntityID, name, systemPrompt string, br brain.Brain, reg
 	}, nil
 }
 
-// RememberAction records a memory pair for the just-completed step:
-// the agent's tool choice and the tool's result. Either may be
-// empty (e.g. the brain returned no tool call). Returns the IDs
-// inserted; errors are logged via the returned error so the sim
-// can decide whether to surface them.
 func (a *Agent) RememberAction(ctx context.Context, tick world.Tick, thought, toolName, toolResult string) error {
 	if a.Memory == nil {
 		return nil
@@ -157,7 +103,6 @@ func (a *Agent) RememberAction(ctx context.Context, tick world.Tick, thought, to
 	return nil
 }
 
-// RememberObservation records an observation of an external event.
 func (a *Agent) RememberObservation(ctx context.Context, tick world.Tick, content string) error {
 	if a.Memory == nil || content == "" {
 		return nil
@@ -170,18 +115,12 @@ func (a *Agent) RememberObservation(ctx context.Context, tick world.Tick, conten
 	return nil
 }
 
-// DeliverHeard enqueues a HeardEvent into this agent's inbox. The
-// sim's broadcast machinery calls this on every other agent in the
-// world when one of them issues Speak. Thread-safe.
 func (a *Agent) DeliverHeard(ev brain.HeardEvent) {
 	a.inboxMu.Lock()
 	defer a.inboxMu.Unlock()
 	a.inbox = append(a.inbox, ev)
 }
 
-// DrainHeard returns and clears the inbox. Called by the sim just
-// before BuildPerception so the agent perceives broadcasts on the
-// tick they arrived. Thread-safe.
 func (a *Agent) DrainHeard() []brain.HeardEvent {
 	a.inboxMu.Lock()
 	defer a.inboxMu.Unlock()
@@ -193,17 +132,12 @@ func (a *Agent) DrainHeard() []brain.HeardEvent {
 	return out
 }
 
-// InboxLen returns the number of pending Heard events without
-// draining. Used by the sim's skip-tick decision: an agent that
-// has been spoken to since its last turn must wake up.
 func (a *Agent) InboxLen() int {
 	a.inboxMu.Lock()
 	defer a.inboxMu.Unlock()
 	return len(a.inbox)
 }
 
-// RememberHeard records a heard broadcast as an observation in the
-// agent's memory stream so it persists past the next tick.
 func (a *Agent) RememberHeard(ctx context.Context, tick world.Tick, ev brain.HeardEvent) error {
 	if a.Memory == nil {
 		return nil
@@ -217,8 +151,6 @@ func (a *Agent) RememberHeard(ctx context.Context, tick world.Tick, ev brain.Hea
 	return nil
 }
 
-// RetrieveMemories returns the top-K records relevant to the
-// current perception query.
 func (a *Agent) RetrieveMemories(ctx context.Context, query string, tick world.Tick) ([]memory.Record, error) {
 	if a.Memory == nil {
 		return nil, nil
@@ -234,12 +166,6 @@ func (a *Agent) RetrieveMemories(ctx context.Context, query string, tick world.T
 	return recs, nil
 }
 
-// BuildPerception assembles a Perception snapshot from the world.
-// memories are the retrieved records to inject; may be nil.
-// heard contains broadcasts drained from this agent's inbox; may
-// be nil. As a side effect, BuildPerception clears focus when the
-// focused entity is dead and decrements the focus turn counter,
-// clearing it when it reaches zero.
 func (a *Agent) BuildPerception(w *world.World, memories []memory.Record, heard []brain.HeardEvent) brain.Perception {
 	ents := w.Entities()
 	rels := w.Relationships()
@@ -329,9 +255,6 @@ func (a *Agent) BuildPerception(w *world.World, memories []memory.Record, heard 
 	return p
 }
 
-// MarkSeen advances the agent's SeenEventID to the highest event ID
-// currently in the world. Called by the sim after each step so the
-// next perception only carries the deltas.
 func (a *Agent) MarkSeen(w *world.World) {
 	events := w.Events()
 	if len(events) == 0 {
@@ -343,15 +266,8 @@ func (a *Agent) MarkSeen(w *world.World) {
 	}
 }
 
-// containsKind reports whether a relationship kind designates the
-// soft "contains" hierarchy. Case-insensitive: the engine never
-// interprets kinds, but "Contains" or "CONTAINS" should still feed
-// the frontier so the LLM gets a forgiving affordance.
 func containsKind(k string) bool { return strings.EqualFold(k, "contains") }
 
-// buildContainmentGraph projects relationships into outgoing and
-// incoming "contains" adjacency maps. Soft-deleted relationships are
-// already filtered upstream (w.Relationships() returns live only).
 func buildContainmentGraph(rels []world.Relationship) (children, parents map[world.EntityID][]world.EntityID) {
 	children = map[world.EntityID][]world.EntityID{}
 	parents = map[world.EntityID][]world.EntityID{}
@@ -365,9 +281,6 @@ func buildContainmentGraph(rels []world.Relationship) (children, parents map[wor
 	return children, parents
 }
 
-// assignDepth runs a BFS from each containment root (alive non-agent
-// entity with no incoming "contains" edge) and returns the shortest
-// distance in edges from any root.
 func assignDepth(
 	ents []world.Entity,
 	children, parents map[world.EntityID][]world.EntityID,
@@ -397,11 +310,6 @@ func assignDepth(
 	return depth
 }
 
-// buildFrontier collects the deepest leaf entities and one chain
-// from a root down to the deepest leaf. Returns the zero value when
-// no "contains" edges exist. A leaf must be parented (have an
-// incoming "contains" edge) and childless; orphans and roots are
-// not leaves.
 func buildFrontier(
 	ents []world.Entity,
 	children, parents map[world.EntityID][]world.EntityID,
@@ -446,10 +354,6 @@ func buildFrontier(
 	}
 }
 
-// longestContainmentPath does a DFS from each containment root and
-// returns the longest chain in nodes (path length in edges + 1).
-// Ties are broken by smallest IDs along the chain so the result is
-// deterministic.
 func longestContainmentPath(
 	ents []world.Entity,
 	children map[world.EntityID][]world.EntityID,
@@ -509,9 +413,6 @@ func longestContainmentPath(
 	return out
 }
 
-// buildFocusView walks the "contains" sub-tree rooted at focus,
-// capped at focusSubtreeCap nodes. Returns nil when the focus
-// entity is not in entByID (caller already cleared lifecycle state).
 func buildFocusView(
 	focus world.EntityID,
 	turnsLeft int,
@@ -577,10 +478,6 @@ func buildFocusView(
 	}
 }
 
-// collectSuggestions returns place-scoped sub-agent nudges for
-// entities that have grown past frontierChildSpawnThreshold children
-// since the last suggestion was emitted. It mutates the agent's
-// dedupe cache so the same entity isn't surfaced every tick.
 func (a *Agent) collectSuggestions(
 	ents []world.Entity,
 	children map[world.EntityID][]world.EntityID,

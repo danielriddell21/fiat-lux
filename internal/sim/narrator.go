@@ -8,10 +8,6 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/narrator"
 )
 
-// maybeWriteChapter consults the narrator's policy and, if a chapter
-// is due, runs WriteChapter inline (so the chapter completes within
-// the same Step that triggered it). The narrator is a meta-agent;
-// only one chapter is in flight at a time.
 func (s *Sim) maybeWriteChapter(ctx context.Context) {
 	s.mu.Lock()
 	n := s.narrator
@@ -52,8 +48,6 @@ func (s *Sim) maybeWriteChapter(ctx context.Context) {
 		memory.AddOptions{})
 }
 
-// Annals returns a snapshot of every chapter the narrator has
-// written. Returns nil when no narrator is configured.
 func (s *Sim) Annals() []narrator.Chapter {
 	s.mu.Lock()
 	defer s.mu.Unlock()

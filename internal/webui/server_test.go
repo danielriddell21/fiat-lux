@@ -35,8 +35,6 @@ func newTestSim(t *testing.T) *sim.Sim {
 	return s
 }
 
-// seedWorld populates a sim with a small known world so the JSON
-// shape can be asserted deterministically.
 func seedWorld(t *testing.T, s *sim.Sim) (world.EntityID, world.EntityID) {
 	t.Helper()
 	a, err := s.World.Create(world.NoAgent, "planet", world.Properties{"name": "Erith"})
@@ -211,7 +209,6 @@ type sseFrame struct {
 	data  string
 }
 
-// readSSEEvent reads one event: / data: pair from the SSE stream.
 func readSSEEvent(r *bufio.Reader) (sseFrame, error) {
 	var f sseFrame
 	for {

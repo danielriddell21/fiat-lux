@@ -11,49 +11,33 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// Storer is the persistence contract the Model needs. The store
-// package's *Store satisfies it; tests substitute fakes.
 type Storer interface {
 	Save(ctx context.Context, w *world.World) error
 }
 
-// Stepper is the contract for whatever drives the sim. The sim
-// package's *Sim satisfies it via an adapter in cmd/fiatlux. The
-// Model calls Step from its tick command when unpaused.
 type Stepper interface {
 	Step(ctx context.Context) (StepSummary, error)
 }
 
-// MemoryAccessor is an optional supertype of Stepper used by the
-// memory inspector overlay. The sim adapter satisfies it when a
-// memory stream is attached.
 type MemoryAccessor interface {
 	MemorySnapshot() MemorySnapshot
 }
 
-// Interveneable is the optional Stepper supertype the TUI uses to
-// drive sandbox interventions (the "i" key chord). The sim adapter
-// satisfies it.
 type Interveneable interface {
 	InterveneCreate(typeLabel string) (string, error)
 	InterveneDestroy(entityID uint64) (string, error)
 	InterveneSpeak(content string) (string, error)
 }
 
-// AnnalsAccessor is an optional supertype of Stepper used by the
-// Annals overlay (key "a"). The sim adapter satisfies it when a
-// narrator is configured.
 type AnnalsAccessor interface {
 	Annals() []ChapterSummary
 }
 
-// ChapterSummary is the TUI's projection of one narrator chapter.
 type ChapterSummary struct {
 	Tick    uint64
 	Content string
 }
 
-// AgentInfo is the TUI's minimal projection of one agent.
 type AgentInfo struct {
 	ID        uint64
 	Name      string
@@ -63,15 +47,12 @@ type AgentInfo struct {
 	Dead      bool
 }
 
-// AgentLister is an optional Stepper supertype the TUI uses for
-// focus cycling across multiple agents.
 type AgentLister interface {
 	Agents() []AgentInfo
 	FocusedAgentID() uint64
 	SetFocusedAgentID(id uint64)
 }
 
-// WorldInfo is the TUI's minimal projection of one world.
 type WorldInfo struct {
 	Index       int
 	Name        string
@@ -80,10 +61,6 @@ type WorldInfo struct {
 	AgentCount  int
 }
 
-// UniverseLister is an optional Stepper supertype the TUI uses for
-// multi-world configurations. With ctrl-tab the user cycles which
-// world is in focus; the world / agents / memory inspector all
-// follow.
 type UniverseLister interface {
 	Worlds() []WorldInfo
 	FocusedWorldIdx() int
@@ -91,16 +68,10 @@ type UniverseLister interface {
 	CycleFocusedWorld(delta int)
 }
 
-// WorldProvider supplies the focused world to the TUI. With a
-// single-world model this is a static reference; with a
-// Universe attached it returns the currently-focused world.
 type WorldProvider interface {
 	FocusedWorld() *world.World
 }
 
-// StepSummary is the TUI's minimal projection of sim.StepResult.
-// Defined here to keep internal/tui independent of internal/sim;
-// the wiring in main maps between them.
 type StepSummary struct {
 	Tick       uint64
 	Skipped    bool
@@ -110,7 +81,6 @@ type StepSummary struct {
 	ToolErr    error
 }
 
-// Model is the Bubble Tea v2 model that drives the fiat-lux TUI.
 type Model struct {
 	world  *world.World
 	store  Storer
@@ -136,36 +106,22 @@ type Model struct {
 	message     string
 	messageTime time.Time
 
-	// dummyCursor cycles through type_label candidates so successive
-	// debug-create presses produce varied output.
 	dummyCursor int
 }
 
-// dummyTypes is the rotation used by the "n" debug keybind.
 var dummyTypes = []string{"planet", "ocean", "continent", "mountain", "forest", "star", "creature", "idea"}
 
-// flashTimeoutMsg is delivered by tea.Tick to clear a transient
-// status message after a short delay.
 type flashTimeoutMsg time.Time
 
-// simTickMsg fires on every sim-tick interval. When the model is not
-// paused it triggers a Stepper.Step.
 type simTickMsg struct{}
 
-// stepCompletedMsg is delivered by the async Step goroutine when
-// the brain call returns.
 type stepCompletedMsg struct {
 	Summary StepSummary
 	Err     error
 }
 
-// DefaultTickInterval is the gap between sim ticks. Conservative so
-// the TUI stays readable even with a chatty stub.
 const DefaultTickInterval = 1500 * time.Millisecond
 
-// NewModel constructs a TUI model. The world must already be
-// non-nil; store and sim may be nil to disable persistence and
-// auto-stepping respectively.
 func NewModel(w *world.World, st Storer, sm Stepper) Model {
 	return Model{
 		world:        w,
@@ -178,8 +134,6 @@ func NewModel(w *world.World, st Storer, sm Stepper) Model {
 	}
 }
 
-// WithTickInterval returns a copy of the model with a custom tick
-// interval. Useful for tests that want to step quickly.
 func (m Model) WithTickInterval(d time.Duration) Model {
 	if d <= 0 {
 		d = DefaultTickInterval
@@ -188,16 +142,10 @@ func (m Model) WithTickInterval(d time.Duration) Model {
 	return m
 }
 
-// LastStep exposes the most recent Stepper result for tests.
 func (m Model) LastStep() StepSummary { return m.lastStep }
 
-// World returns the underlying world used as the default when no
-// Universe is attached. Exposed mainly for tests.
 func (m Model) World() *world.World { return m.world }
 
-// focusedWorld is the world the TUI is currently rendering. With
-// a Universe attached this follows ctrl-tab focus; otherwise it's
-// the static world passed at NewModel.
 func (m Model) focusedWorld() *world.World {
 	if wp, ok := m.sim.(WorldProvider); ok && wp != nil {
 		if w := wp.FocusedWorld(); w != nil {
@@ -207,23 +155,14 @@ func (m Model) focusedWorld() *world.World {
 	return m.world
 }
 
-// IsPaused reports the current pause state. Exposed for tests.
 func (m Model) IsPaused() bool { return m.paused }
 
-// HelpVisible reports whether the help overlay is shown. Exposed
-// for tests.
 func (m Model) HelpVisible() bool { return m.helpVisible }
 
-// MemoryVisible reports whether the memory inspector overlay is
-// shown.
 func (m Model) MemoryVisible() bool { return m.memoryVisible }
 
-// Message returns the current transient status line, if any.
 func (m Model) Message() string { return m.message }
 
-// Init satisfies tea.Model. When a sim is attached it schedules the
-// first sim-tick. The model starts paused so the first tick is a
-// no-op until the user presses space.
 func (m Model) Init() tea.Cmd {
 	if m.sim == nil {
 		return nil
@@ -231,7 +170,6 @@ func (m Model) Init() tea.Cmd {
 	return m.scheduleTick()
 }
 
-// Update satisfies tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -258,9 +196,6 @@ func (m Model) scheduleTick() tea.Cmd {
 	return tea.Tick(m.tickInterval, func(_ time.Time) tea.Msg { return simTickMsg{} })
 }
 
-// cycleWorld advances the focused world by delta (typically +1 or
-// -1). No-op when the sim does not expose UniverseLister or there
-// is only one world.
 func (m Model) cycleWorld(delta int) {
 	lister, ok := m.sim.(UniverseLister)
 	if !ok {
@@ -272,9 +207,6 @@ func (m Model) cycleWorld(delta int) {
 	lister.CycleFocusedWorld(delta)
 }
 
-// cycleFocus advances the focused agent forwards (+1) or backwards
-// (-1) through the AgentLister's list. No-op when the sim does not
-// expose AgentLister or the list is shorter than 2.
 func (m Model) cycleFocus(delta int) {
 	lister, ok := m.sim.(AgentLister)
 	if !ok {
@@ -351,9 +283,6 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	return m.handleActionKey(key)
 }
 
-// handleToggleKey handles the view/navigation keys: quit, panel
-// toggles, and focus/world cycling. ok is false when key matches none
-// of them, so the caller can try the action keys next.
 func (m Model) handleToggleKey(key string) (tea.Model, tea.Cmd, bool) {
 	switch {
 	case Matches(key, m.keys.Quit):
@@ -382,8 +311,6 @@ func (m Model) handleToggleKey(key string) (tea.Model, tea.Cmd, bool) {
 	return m, nil, true
 }
 
-// handleActionKey handles the keys that trigger sim actions:
-// intervene, speed control, save, and the debug shortcuts.
 func (m Model) handleActionKey(key string) (tea.Model, tea.Cmd) {
 	switch {
 	case Matches(key, m.keys.Intervene):
@@ -408,8 +335,6 @@ func (m Model) handleActionKey(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleInterveneChord consumes the second key of the "i" chord and
-// invokes the matching intervention on the sim adapter. esc cancels.
 func (m Model) handleInterveneChord(key string) (tea.Model, tea.Cmd) {
 	m.interveneActive = false
 	iv, ok := m.sim.(Interveneable)
@@ -496,10 +421,6 @@ func (m Model) handleDebugRelate() (tea.Model, tea.Cmd) {
 	return m.flash(fmt.Sprintf("relation #%d: #%d part of #%d", id, from.ID, to.ID))
 }
 
-// adjustSpeed scales the tick interval by num/den (e.g. 2/1 to halve
-// the interval = double the rate). Clamped so the user can't disappear
-// off the fast end into a busy loop or off the slow end into nothing
-// happening at all. The next scheduleTick() picks up the new value.
 func (m Model) adjustSpeed(num, den int) (tea.Model, tea.Cmd) {
 	const (
 		minInterval = 100 * time.Millisecond
@@ -537,16 +458,12 @@ func (m Model) flash(text string) (tea.Model, tea.Cmd) {
 	})
 }
 
-// View satisfies tea.Model. The view runs in the alternate screen
-// buffer so the TUI fully owns the terminal while running.
 func (m Model) View() tea.View {
 	v := tea.NewView(m.Render())
 	v.AltScreen = true
 	return v
 }
 
-// Render is the testable body of View - returns the raw string with
-// no tea.View wrapping.
 func (m Model) Render() string {
 	w := m.width
 	h := m.height
@@ -705,6 +622,4 @@ func (m Model) renderHelpScreen(width, height int) string {
 	return lg.Place(width, height, lg.Center, lg.Center, box)
 }
 
-// Compile-time assertion that *Model values returned by Update are
-// still tea.Model implementations.
 var _ tea.Model = Model{}

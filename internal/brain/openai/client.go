@@ -15,42 +15,24 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/brain"
 )
 
-// DefaultBaseURL is the official OpenAI endpoint.
 const DefaultBaseURL = "https://api.openai.com/v1"
 
-// DefaultModel is the default OpenAI model.
 const DefaultModel = "gpt-5.4-nano"
 
-// Options configures a Brain.
 type Options struct {
-	// BaseURL is the API root. Defaults to DefaultBaseURL. Override
-	// for OpenAI-compatible providers (LM Studio, llama.cpp, vLLM,
-	// OpenRouter, Ollama's /v1 endpoint).
 	BaseURL string
 
-	// APIKey is sent as a bearer token. Required for OpenAI; optional
-	// for some self-hosted gateways.
 	APIKey string
 
-	// Model is the model identifier the provider expects.
 	Model string
 
-	// SystemPrompt is the static instruction prepended to every call.
 	SystemPrompt string
 
-	// HTTPClient is the *http.Client used for requests. Defaults to a
-	// new client with a 60-second timeout. Tests inject a client
-	// pointed at an httptest.Server.
 	HTTPClient *http.Client
 
-	// Provider is a human-readable label included in errors and the
-	// telemetry stream. Defaults to "openai".
 	Provider string
 }
 
-// Brain is the OpenAI Chat Completions implementation. The same
-// type backs the openaicompat and ollama subpackages by varying
-// BaseURL / Model / Provider.
 type Brain struct {
 	baseURL      string
 	apiKey       string
@@ -60,8 +42,6 @@ type Brain struct {
 	provider     string
 }
 
-// New constructs a Brain. Returns an error only if BaseURL parses
-// invalidly or required fields are missing.
 func New(opts Options) (*Brain, error) {
 	baseURL := strings.TrimRight(opts.BaseURL, "/")
 	if baseURL == "" {
@@ -92,17 +72,12 @@ func New(opts Options) (*Brain, error) {
 	}, nil
 }
 
-// Model returns the model identifier the brain uses. Surfaced for
-// telemetry and logs.
 func (b *Brain) Model() string { return b.model }
 
-// Provider returns the human-readable provider label.
 func (b *Brain) Provider() string { return b.provider }
 
-// Close releases the HTTP client. No-op for the default client.
 func (b *Brain) Close() error { return nil }
 
-// chatRequest is the OpenAI Chat Completions request body.
 type chatRequest struct {
 	Model       string        `json:"model"`
 	Messages    []chatMessage `json:"messages"`
@@ -140,7 +115,6 @@ type chatToolCallFunc struct {
 	Arguments string `json:"arguments"`
 }
 
-// chatResponse is the OpenAI Chat Completions response body.
 type chatResponse struct {
 	Choices []chatChoice `json:"choices"`
 	Usage   chatUsage    `json:"usage"`
@@ -156,14 +130,12 @@ type chatUsage struct {
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
 	TotalTokens      int64 `json:"total_tokens"`
-	// Optional fields supported by some providers; absent on others.
+
 	PromptTokensDetails *struct {
 		CachedTokens int64 `json:"cached_tokens"`
 	} `json:"prompt_tokens_details,omitempty"`
 }
 
-// Decide consults the provider with the agent's perception and the
-// tool catalogue, returning the chosen tool call.
 func (b *Brain) Decide(ctx context.Context, p brain.Perception, tools []brain.ToolDef) (brain.Decision, error) {
 	req := chatRequest{
 		Model: b.model,
@@ -271,12 +243,6 @@ func parseDecision(r chatResponse) (brain.Decision, error) {
 	return d, nil
 }
 
-// extractThought normalises a raw assistant message into the reasoning
-// text shown in the TUI. Qwen-family models (and a few others) wrap
-// their chain-of-thought in <think>...</think>; we strip the tags but
-// keep the inner text so the reasoning pane shows the monologue.
-// Segments are joined with a blank line so the user can tell the
-// reasoning from any post-think answer text.
 func extractThought(content string) string {
 	if !strings.Contains(content, "<think>") {
 		return strings.TrimSpace(content)
@@ -307,9 +273,6 @@ func extractThought(content string) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// redact scrubs likely API keys from an upstream error body. Cheap
-// best-effort - never substitute this for not logging keys in the
-// first place.
 func redact(s string) string {
 	// "sk-" covers both OpenAI keys and the common "sk-ant-" prefix
 	// for Anthropic; matching one substring captures both.
@@ -336,5 +299,4 @@ func isAlnum(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
-// Compile-time assertion.
 var _ brain.Brain = (*Brain)(nil)

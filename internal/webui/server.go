@@ -1,8 +1,3 @@
-// Package webui hosts an embedded HTTP viewer for the active sim.
-// The server exposes a JSON snapshot of the focused world plus a
-// Server-Sent Events stream that pushes a notification on every
-// Sim.Step. Static assets are baked in via go:embed so the binary
-// stays single-file.
 package webui
 
 import (
@@ -20,34 +15,18 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/sim"
 )
 
-// SimProvider returns the sim whose world should be rendered. The
-// caller is responsible for keeping it in sync with TUI focus: for a
-// single sim it can be `func() *sim.Sim { return s }`; for a
-// Universe it can be `func() *sim.Sim { return u.Focused() }`.
 type SimProvider func() *sim.Sim
 
-// Options configures a new Server.
 type Options struct {
-	// Addr is the listen address, e.g. ":8080" or "127.0.0.1:8080".
-	// Required.
 	Addr string
 
-	// Provider returns the currently-focused sim on every request.
-	// Required.
 	Provider SimProvider
 
-	// Logger receives lifecycle messages (start, shutdown, errors).
-	// Nil disables logging.
 	Logger *log.Logger
 
-	// ImageCache, when non-nil, makes /api/image/<hash>.png serve
-	// the bytes the multimodal generator wrote.
 	ImageCache *imagegen.Cache
 }
 
-// Server is the HTTP front door. Construct with New, attach
-// Publish to one or more Sim.Observer fields, then call Start to
-// begin listening; Shutdown cleans up.
 type Server struct {
 	provider   SimProvider
 	broker     *broker
@@ -58,8 +37,6 @@ type Server struct {
 	imageCache *imagegen.Cache
 }
 
-// New constructs a Server. The HTTP listener is not opened until
-// Start is called.
 func New(opts Options) (*Server, error) {
 	if opts.Provider == nil {
 		return nil, errors.New("webui: Options.Provider is required")
@@ -89,14 +66,10 @@ func New(opts Options) (*Server, error) {
 	return s, nil
 }
 
-// Publish is the callback to attach to sim.Sim.Observer. It is safe
-// for concurrent calls.
 func (s *Server) Publish(res sim.StepResult) {
 	s.broker.publish(res)
 }
 
-// Start opens the listener and serves in the current goroutine.
-// Returns http.ErrServerClosed on a clean shutdown.
 func (s *Server) Start() error {
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(context.Background(), "tcp", s.addr)
@@ -114,7 +87,6 @@ func (s *Server) Start() error {
 	return nil
 }
 
-// Shutdown gracefully closes the server.
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.srv == nil {
 		return nil
@@ -126,8 +98,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// Addr returns the resolved listen address; useful after Start
-// when the configured Addr was ":0" (random port).
 func (s *Server) Addr() string {
 	if s.listener != nil {
 		return s.listener.Addr().String()
@@ -135,7 +105,6 @@ func (s *Server) Addr() string {
 	return s.addr
 }
 
-// assetsHandler serves the embedded static files under /assets/.
 func (s *Server) assetsHandler() http.Handler {
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err != nil {
@@ -146,8 +115,6 @@ func (s *Server) assetsHandler() http.Handler {
 	return http.FileServer(http.FS(sub))
 }
 
-// handleIndex serves the single-page UI. Falls back to 404 for
-// anything other than the root.
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -169,8 +136,6 @@ func (s *Server) logf(format string, args ...any) {
 	s.logger.Printf("webui: "+format, args...)
 }
 
-// isLocalOnly reports whether the configured address is loopback
-// only. Both an empty host and "localhost"/"127.0.0.1"/"::1" count.
 func (s *Server) isLocalOnly() bool {
 	host, _, err := net.SplitHostPort(s.addr)
 	if err != nil {

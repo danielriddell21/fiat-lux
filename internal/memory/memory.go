@@ -14,27 +14,20 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// RecordID is the stable identifier of a memory record within a
-// single stream. IDs are assigned monotonically starting at 1.
 type RecordID uint64
 
-// Kind classifies a memory record so the heuristic scorer and
-// reflection pass can treat the different categories distinctly.
 type Kind string
 
-// The complete set of memory kinds the sim emits.
 const (
-	KindObservation Kind = "observation" // world events the agent perceived
-	KindAction      Kind = "action"      // a tool call the agent issued
-	KindOutcome     Kind = "outcome"     // the tool's result string
-	KindThought     Kind = "thought"     // inner monologue from the brain
-	KindReflection  Kind = "reflection"  // higher-level synthesis
-	KindInheritance Kind = "inheritance" // digest passed down from a dead parent
-	KindChapter     Kind = "chapter"     // narrator-authored summary of a world's recent history
+	KindObservation Kind = "observation"
+	KindAction      Kind = "action"
+	KindOutcome     Kind = "outcome"
+	KindThought     Kind = "thought"
+	KindReflection  Kind = "reflection"
+	KindInheritance Kind = "inheritance"
+	KindChapter     Kind = "chapter"
 )
 
-// Record is one entry in an agent's memory stream. Smallville's
-// "MemoryRecord" - id, owner, when, what, why-it-matters, how-to-find.
 type Record struct {
 	ID          RecordID      `json:"id"`
 	AgentID     world.AgentID `json:"agent_id"`
@@ -43,30 +36,21 @@ type Record struct {
 	CreatedAt   world.Tick    `json:"created_at"`
 	CreatedWall time.Time     `json:"created_wall"`
 	Importance  float64       `json:"importance"`
-	Embedding   []float64     `json:"-"` // omitted from JSON: large, useless to UI
-	// LastAccessTick tracks when this record was most recently
-	// retrieved; recency is measured as "since last access" rather
-	// than "since creation". Zero means never retrieved.
+	Embedding   []float64     `json:"-"`
+
 	LastAccessTick world.Tick `json:"last_access_tick,omitempty"`
 }
 
-// ScoreWeights controls the relative contributions of the three
-// Smallville factors. Defaults sum to 1.0; callers may tune.
 type ScoreWeights struct {
 	Recency    float64
 	Importance float64
 	Relevance  float64
 }
 
-// DefaultWeights are roughly equal across the three factors with a
-// gentle relevance bias - intuition: in a fast-moving sim, "what's
-// going on right now" usually wins over "what mattered a long time
-// ago".
 func DefaultWeights() ScoreWeights {
 	return ScoreWeights{Recency: 0.5, Importance: 1.0, Relevance: 1.0}
 }
 
-// Stream is one agent's memory stream. Safe for concurrent use.
 type Stream struct {
 	mu      sync.RWMutex
 	records []Record
@@ -76,8 +60,6 @@ type Stream struct {
 	halfLife float64
 }
 
-// New constructs an empty Stream. halfLife is the recency
-// exponential's half-life in ticks; default 100.
 func New(weights ScoreWeights, halfLife float64) *Stream {
 	if halfLife <= 0 {
 		halfLife = 100
@@ -92,18 +74,12 @@ func New(weights ScoreWeights, halfLife float64) *Stream {
 	}
 }
 
-// Len returns the total number of records.
 func (s *Stream) Len() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.records)
 }
 
-// Restore bulk-loads pre-existing records into the stream and
-// advances the next-ID watermark past the highest restored ID.
-// Used by the store to rehydrate persisted memory at session start.
-// Existing records (if any) are replaced. Embedding fields stay
-// empty unless the caller already populated them.
 func (s *Stream) Restore(records []Record) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -120,8 +96,6 @@ func (s *Stream) Restore(records []Record) {
 	}
 }
 
-// All returns deep copies of every record, in insertion order.
-// Exposed for the TUI memory inspector and tests.
 func (s *Stream) All() []Record {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -137,26 +111,14 @@ func (s *Stream) All() []Record {
 	return out
 }
 
-// AddOptions carries the per-Add knobs that don't fit on the
-// minimal (kind, content, tick) trio.
 type AddOptions struct {
-	// Embedder, when non-nil, is called to compute the record's
-	// embedding before insertion. Failures are surfaced as Add's
-	// returned error; the record is not inserted.
 	Embedder Embedder
 
-	// Scorer, when non-nil, overrides importance scoring. Nil falls
-	// back to the heuristic Importance.
 	Scorer Importance
 
-	// Importance is a pre-computed override. When > 0 it bypasses
-	// the Scorer.
 	Importance float64
 }
 
-// Add appends a record to the stream. The record is assigned an ID
-// and timestamped. The Embedder and Scorer (or the heuristic
-// Importance) annotate the record before insertion.
 func (s *Stream) Add(ctx context.Context, ag world.AgentID, kind Kind, content string, tick world.Tick, opts AddOptions) (Record, error) {
 	if content == "" {
 		return Record{}, errors.New("memory: empty content")
@@ -202,14 +164,6 @@ func (s *Stream) Add(ctx context.Context, ag world.AgentID, kind Kind, content s
 	return r, nil
 }
 
-// Retrieve returns the top-K records by combined recency *
-// importance * relevance score, given a query string the embedder
-// hashes into a query vector for relevance.
-//
-// k <= 0 returns no records. An empty stream returns an empty
-// slice with no error. When the embedder is nil or the query is
-// empty, relevance contributes zero (the score reduces to recency
-// * importance).
 func (s *Stream) Retrieve(ctx context.Context, query string, tick world.Tick, k int, embedder Embedder) ([]Record, error) {
 	if k <= 0 {
 		return nil, nil
@@ -241,8 +195,6 @@ func (s *Stream) Retrieve(ctx context.Context, query string, tick world.Tick, k 
 	return out, nil
 }
 
-// snapshot copies the stream's records and scoring parameters under
-// the read lock. ok is false when the stream is empty.
 func (s *Stream) snapshot() (records []Record, weights ScoreWeights, halfLife float64, ok bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -254,9 +206,6 @@ func (s *Stream) snapshot() (records []Record, weights ScoreWeights, halfLife fl
 	return records, s.weights, s.halfLife, true
 }
 
-// embedQuery hashes the query into a vector for relevance scoring.
-// Returns a nil vector (and no error) when the embedder is nil or the
-// query is empty.
 func embedQuery(ctx context.Context, query string, embedder Embedder) ([]float64, error) {
 	if embedder == nil || query == "" {
 		return nil, nil
@@ -268,8 +217,6 @@ func embedQuery(ctx context.Context, query string, embedder Embedder) ([]float64
 	return v, nil
 }
 
-// rankRecords scores every record by recency * importance * relevance
-// and returns them sorted best-first, with deterministic tie-breaks.
 func rankRecords(records []Record, queryVec []float64, tick world.Tick, weights ScoreWeights, halfLife float64) []Record {
 	type scored struct {
 		r     Record
@@ -297,7 +244,6 @@ func rankRecords(records []Record, queryVec []float64, tick world.Tick, weights 
 	return out
 }
 
-// recordScore computes one record's combined retrieval score.
 func recordScore(r Record, queryVec []float64, tick world.Tick, weights ScoreWeights, halfLife float64) float64 {
 	// Recency uses "since most recent contact" - either last access or
 	// creation - so a memory retrieved again resets its recency.
@@ -318,7 +264,6 @@ func recordScore(r Record, queryVec []float64, tick world.Tick, weights ScoreWei
 	return rec*weights.Recency + imp*weights.Importance + rel*weights.Relevance
 }
 
-// bumpAccess resets LastAccessTick to tick for the given records.
 func (s *Stream) bumpAccess(ids []RecordID, tick world.Tick) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -334,8 +279,6 @@ func (s *Stream) bumpAccess(ids []RecordID, tick world.Tick) {
 	}
 }
 
-// PerceptionViews converts Records to brain.MemoryViews for
-// injection into a Perception.
 func PerceptionViews(rs []Record) []brain.MemoryView {
 	out := make([]brain.MemoryView, len(rs))
 	for i, r := range rs {
@@ -372,10 +315,6 @@ func cosine(a, b []float64) float64 {
 	return dot / (math.Sqrt(na) * math.Sqrt(nb))
 }
 
-// SummariseQuery is the canonical query string the sim feeds into
-// Retrieve. It is a stable, agent-side projection of perception
-// that the embedder can hash. Exposed so the sim and tests share a
-// single definition.
 func SummariseQuery(entities int, recent []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "world with %d entities", entities)

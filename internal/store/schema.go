@@ -1,12 +1,5 @@
 package store
 
-// schema is the SQLite DDL for the fiat-lux store. The store is
-// event-sourced: worlds carry only their name and current tick, and
-// every World mutation is appended to the events table. Live state
-// (live entities, live relationships) is reconstructed at load time
-// by replaying events through world.ApplyEventForLoad. Agents'
-// memory streams live in their own table so they survive a session
-// boundary independently of the world replay.
 const schema = `
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;

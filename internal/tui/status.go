@@ -5,18 +5,15 @@ import (
 	"strings"
 )
 
-// StatusInfo is the data the status bar displays. Pure data so the
-// renderer is easy to test.
 type StatusInfo struct {
 	WorldName   string
 	Tick        uint64
 	EntityCount int
 	AgentCount  int
 	Paused      bool
-	Width       int // total available columns; 0 = no width hint
+	Width       int
 }
 
-// RenderStatus renders the top status bar to a single line.
 func RenderStatus(info StatusInfo, s Styles) string {
 	var parts []string
 	add := func(key, val string) {

@@ -16,7 +16,6 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/sim"
 )
 
-// testVersion is the version string threaded through run in tests.
 const testVersion = "dev"
 
 func TestRunPrintsBanner(t *testing.T) {
@@ -249,9 +248,6 @@ func TestCmdServe_BootsWebServer(t *testing.T) {
 	}
 }
 
-// pickFreeAddr returns 127.0.0.1:<random-free-port>. There is a small
-// race window between when we close this listener and when cmdServe
-// rebinds, but it's acceptable for a single test.
 func pickFreeAddr() (string, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
