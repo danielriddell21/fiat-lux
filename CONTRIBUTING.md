@@ -22,12 +22,17 @@ just build      # static binary -> ./fiatlux
 just test       # race-enabled unit tests
 just cover      # coverage report
 just lint       # go vet + golangci-lint
-just check      # lint + test + build, in that order
+just ci         # lint + test + build, in that order
 just tidy       # go mod tidy
 just clean      # remove build artefacts
 ```
 
-`just check` is the local gate before pushing.
+`just ci` is the local gate before pushing.
+
+## Conventions
+
+The CLI entrypoint structure is shared across the tool family (unum is the
+reference). See [CONVENTIONS.md](CONVENTIONS.md) before changing the entrypoint.
 
 ## Style
 
@@ -60,7 +65,7 @@ up in a fixture — don't disarm it.
 
 1. New package under `internal/brain/<name>`.
 2. Implement `brain.Brain` (`Decide`, `Model`, `Provider`, `Close`).
-3. Add a constructor that the spec-parser in `cmd/fiatlux/main.go`
+3. Add a constructor that the spec-parser in `internal/cli`
    can dispatch to.
 4. Tests with a `RoundTripper` stub. No real network calls.
 

@@ -67,6 +67,6 @@ tidy:
 clean:
     rm -f {{binary}} coverage.txt coverage.html
 
-# Quick "should I commit this?" gate.
+# Full gate: lint + test + build. All must pass before committing.
 [group('dev')]
-check: lint test build
+ci: lint test build
