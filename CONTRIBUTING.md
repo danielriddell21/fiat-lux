@@ -21,7 +21,9 @@ just            # list recipes
 just build      # static binary -> ./fiatlux
 just test       # race-enabled unit tests
 just cover      # coverage report
-just lint       # go vet + golangci-lint
+just lint       # golangci-lint
+just vet        # go vet
+just fmt        # gofmt
 just ci         # lint + test + build, in that order
 just tidy       # go mod tidy
 just clean      # remove build artefacts
