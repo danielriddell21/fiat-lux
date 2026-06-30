@@ -1,19 +1,14 @@
-# Binaries
-/fiatlux
+# Build output
 /bin/
 /dist/
 
-# Test & coverage artefacts
+# Go build & test artifacts
+*.exe
 *.test
 *.out
+*.prof
 coverage.txt
 coverage.html
-
-# Local databases & saves
-*.db
-*.sqlite
-*.sqlite-journal
-runs/
 
 # Editor / OS
 .DS_Store
@@ -21,6 +16,14 @@ runs/
 *.swp
 *~
 
-# Env
+# Env / local
 .env
 .env.local
+.claude/
+
+# Project-specific
+/fiatlux
+*.db
+*.sqlite
+*.sqlite-journal
+runs/
