@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 )
+
+var validHash = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 type Cache struct {
 	dir string
@@ -36,8 +39,8 @@ func (c *Cache) Get(prompt string) ([]byte, error) {
 }
 
 func (c *Cache) GetByHash(hash string) ([]byte, error) {
-	if hash == "" {
-		return nil, errors.New("imagegen: empty hash")
+	if !validHash.MatchString(hash) {
+		return nil, errors.New("imagegen: invalid hash")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
