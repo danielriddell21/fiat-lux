@@ -29,9 +29,7 @@ func RenderPerceptionJSON(p Perception) string {
 		})
 	}
 	for _, rel := range p.AliveRelationships {
-		r.Relationships = append(r.Relationships, relSummary{
-			ID: rel.ID, From: rel.From, To: rel.To, Kind: rel.Kind,
-		})
+		r.Relationships = append(r.Relationships, relSummary(rel))
 	}
 	for _, ev := range p.RecentEvents {
 		s := ev.Summary
@@ -79,9 +77,7 @@ func renderFocus(f *FocusView) *focusSummary {
 		})
 	}
 	for _, r := range f.SubRels {
-		out.SubRels = append(out.SubRels, relSummary{
-			ID: r.ID, From: r.From, To: r.To, Kind: r.Kind,
-		})
+		out.SubRels = append(out.SubRels, relSummary(r))
 	}
 	return out
 }
