@@ -228,7 +228,7 @@ func TestExtractThought(t *testing.T) {
 func TestRedact(t *testing.T) {
 	t.Parallel()
 	in := "auth failed for key sk-abc-XYZ123 and also sk-ant-secret456 fine"
-	out := redact(in)
+	out := brain.Redact(in)
 	if strings.Contains(out, "XYZ123") || strings.Contains(out, "secret456") {
 		t.Errorf("redact left fragments in: %q", out)
 	}

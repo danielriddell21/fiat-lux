@@ -38,7 +38,7 @@ func (h HashEmbedder) Embed(_ context.Context, text string) ([]float64, error) {
 	}
 	v := make([]float64, dim)
 	hasher := fnv.New64a()
-	for i := 0; i < dim; i++ {
+	for i := range dim {
 		hasher.Reset()
 		_, _ = io.WriteString(hasher, text)
 		_, _ = fmt.Fprintf(hasher, "|%d", i)

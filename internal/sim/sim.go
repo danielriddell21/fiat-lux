@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 
 	"github.com/danielriddell21/fiat-lux/internal/agent"
@@ -49,8 +49,10 @@ type Sim struct {
 	maxAgents     int
 	maxSpawnDepth int
 
-	multimodal *MultimodalOptions
-	imageWG    sync.WaitGroup
+	multimodal  *MultimodalOptions
+	imageWG     sync.WaitGroup
+	imageCtx    context.Context
+	imageCancel context.CancelFunc
 
 	narrator     *narrator.Narrator
 	annals       []narrator.Chapter
@@ -183,6 +185,7 @@ func New(opts Options) (*Sim, error) {
 		multimodal:             opts.Multimodal,
 		narrator:               opts.Narrator,
 	}
+	s.imageCtx, s.imageCancel = context.WithCancel(context.Background())
 
 	if err := opts.Drives.Validate(); err != nil {
 		return nil, fmt.Errorf("sim: root drives: %w", err)
@@ -772,24 +775,25 @@ func (s *Sim) publish(res StepResult) {
 }
 
 func (s *Sim) Close() error {
+	s.imageCancel()
 	s.imageWG.Wait()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var firstErr error
+	var errs []error
 	for _, a := range s.agents {
 		if a.Brain == nil {
 			continue
 		}
-		if err := a.Brain.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := a.Brain.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	if s.narrator != nil {
-		if err := s.narrator.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := s.narrator.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	return firstErr
+	return errors.Join(errs...)
 }
 
 func buildMemoryQuery(w *world.World, since world.EventID) string {
@@ -802,7 +806,7 @@ func buildMemoryQuery(w *world.World, since world.EventID) string {
 	for k, v := range types {
 		typeParts = append(typeParts, fmt.Sprintf("%d %s", v, k))
 	}
-	sort.Strings(typeParts)
+	slices.Sort(typeParts)
 
 	var recent []string
 	for _, e := range w.Events() {

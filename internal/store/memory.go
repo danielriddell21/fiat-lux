@@ -1,11 +1,11 @@
 package store
 
 import (
+	"cmp"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/danielriddell21/fiat-lux/internal/memory"
@@ -113,11 +113,9 @@ func MemoryRecordsByAgent(records []memory.Record) map[world.AgentID][]memory.Re
 		out[r.AgentID] = append(out[r.AgentID], r)
 	}
 	for k := range out {
-		sort.SliceStable(out[k], func(i, j int) bool {
-			return out[k][i].ID < out[k][j].ID
+		slices.SortStableFunc(out[k], func(a, b memory.Record) int {
+			return cmp.Compare(a.ID, b.ID)
 		})
 	}
 	return out
 }
-
-var _ = (*sql.DB)(nil)

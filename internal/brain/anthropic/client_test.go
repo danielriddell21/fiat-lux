@@ -198,7 +198,7 @@ func TestDecide_HTTPError_RedactsKeys(t *testing.T) {
 func TestRedact(t *testing.T) {
 	t.Parallel()
 	in := "key sk-ant-XYZ123 and sk-abc-def end"
-	out := redact(in)
+	out := brain.Redact(in)
 	if strings.Contains(out, "XYZ123") || strings.Contains(out, "abc-def") {
 		t.Errorf("redact left fragments: %q", out)
 	}

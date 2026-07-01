@@ -1,8 +1,9 @@
 package world
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 )
 
@@ -100,7 +101,7 @@ func (w *World) Entities() []Entity {
 			out = append(out, e.Clone())
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	slices.SortFunc(out, func(a, b Entity) int { return cmp.Compare(a.ID, b.ID) })
 	return out
 }
 
@@ -111,7 +112,7 @@ func (w *World) EntitiesAll() []Entity {
 	for _, e := range w.entities {
 		out = append(out, e.Clone())
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	slices.SortFunc(out, func(a, b Entity) int { return cmp.Compare(a.ID, b.ID) })
 	return out
 }
 
@@ -134,7 +135,7 @@ func (w *World) Relationships() []Relationship {
 			out = append(out, r.Clone())
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	slices.SortFunc(out, func(a, b Relationship) int { return cmp.Compare(a.ID, b.ID) })
 	return out
 }
 
@@ -145,7 +146,7 @@ func (w *World) RelationshipsAll() []Relationship {
 	for _, r := range w.relationships {
 		out = append(out, r.Clone())
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	slices.SortFunc(out, func(a, b Relationship) int { return cmp.Compare(a.ID, b.ID) })
 	return out
 }
 

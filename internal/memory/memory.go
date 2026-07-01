@@ -1,11 +1,12 @@
 package memory
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -186,7 +187,7 @@ func (s *Stream) Retrieve(ctx context.Context, query string, tick world.Tick, k 
 	}
 	out := make([]Record, limit)
 	idsTouched := make([]RecordID, limit)
-	for i := 0; i < limit; i++ {
+	for i := range limit {
 		out[i] = ranked[i]
 		idsTouched[i] = ranked[i].ID
 	}
@@ -226,16 +227,14 @@ func rankRecords(records []Record, queryVec []float64, tick world.Tick, weights 
 	for i, r := range records {
 		xs[i] = scored{r: r, score: recordScore(r, queryVec, tick, weights, halfLife)}
 	}
-	sort.Slice(xs, func(i, j int) bool {
-		if xs[i].score != xs[j].score {
-			return xs[i].score > xs[j].score
-		}
-		// Tie-break on recency, then on ID, so retrieval order is
-		// deterministic regardless of insertion order.
-		if xs[i].r.CreatedAt != xs[j].r.CreatedAt {
-			return xs[i].r.CreatedAt > xs[j].r.CreatedAt
-		}
-		return xs[i].r.ID > xs[j].r.ID
+	slices.SortFunc(xs, func(a, b scored) int {
+		// Highest score first, tie-broken on recency then ID so retrieval
+		// order is deterministic regardless of insertion order.
+		return cmp.Or(
+			cmp.Compare(b.score, a.score),
+			cmp.Compare(b.r.CreatedAt, a.r.CreatedAt),
+			cmp.Compare(b.r.ID, a.r.ID),
+		)
 	})
 	out := make([]Record, len(xs))
 	for i := range xs {

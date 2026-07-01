@@ -12,7 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1523,7 +1523,7 @@ func writeHumanSummary(w io.Writer, s stepSummary) {
 		for n := range s.ToolCounts {
 			names = append(names, n)
 		}
-		sort.Strings(names)
+		slices.Sort(names)
 		for _, n := range names {
 			lines = append(lines, fmt.Sprintf("  %-16s %d", n+":", s.ToolCounts[n]))
 		}

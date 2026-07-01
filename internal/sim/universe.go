@@ -74,14 +74,14 @@ func (u *Universe) Step(ctx context.Context) (StepResult, error) {
 func (u *Universe) Close() error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	var firstErr error
+	var errs []error
 	for _, s := range u.sims {
-		if err := s.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := s.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	u.closeErr = firstErr
-	return firstErr
+	u.closeErr = errors.Join(errs...)
+	return u.closeErr
 }
 
 func (u *Universe) FocusedWorldName() string {

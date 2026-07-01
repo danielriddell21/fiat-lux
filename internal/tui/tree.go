@@ -2,7 +2,7 @@ package tui
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/danielriddell21/fiat-lux/internal/world"
@@ -67,7 +67,7 @@ func BuildTreeView(entities []world.Entity, rels []world.Relationship) TreeView 
 
 	// Sort children stably by ID for deterministic rendering.
 	for k := range children {
-		sort.Slice(children[k], func(i, j int) bool { return children[k][i] < children[k][j] })
+		slices.Sort(children[k])
 	}
 
 	var build func(id world.EntityID) TreeNode
@@ -91,7 +91,7 @@ func BuildTreeView(entities []world.Entity, rels []world.Relationship) TreeView 
 	for _, e := range entities {
 		ids = append(ids, e.ID)
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	for _, id := range ids {
 		if _, hasParent := parent[id]; hasParent {
 			continue

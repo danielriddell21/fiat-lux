@@ -1,11 +1,12 @@
 package tools
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
-	"sort"
+	"slices"
 
 	"github.com/danielriddell21/fiat-lux/internal/brain"
 	"github.com/danielriddell21/fiat-lux/internal/world"
@@ -64,7 +65,7 @@ func (r *Registry) All() []Tool {
 	for _, t := range r.tools {
 		out = append(out, t)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	slices.SortFunc(out, func(a, b Tool) int { return cmp.Compare(a.Name, b.Name) })
 	return out
 }
 

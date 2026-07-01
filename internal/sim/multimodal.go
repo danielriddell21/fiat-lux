@@ -68,7 +68,7 @@ func (s *Sim) renderImage(cache *imagegen.Cache, gen imagegen.Generator, prompt 
 			_ = err
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(s.imageCtx, 120*time.Second)
 	defer cancel()
 	data, _, err := gen.Generate(ctx, prompt)
 	if err != nil || len(data) == 0 {
