@@ -11,13 +11,6 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// Default returns the full tool catalogue: Create, Modify,
-// Destroy, Relate, Unrelate, Observe, Reflect, SpawnAgent, Speak,
-// DefineTool, Die, Wait, FindByType, FindByProperty, FindRelated,
-// Zoom, Unzoom. SpawnAgent, Speak, DefineTool, Die, Zoom, and Unzoom
-// are intercepted by the sim layer (which has access to per-world
-// or per-agent state); their Apply funcs are minimal stubs the sim
-// never invokes.
 func Default() *Registry {
 	return NewRegistry(
 		Create(),
@@ -40,14 +33,11 @@ func Default() *Registry {
 	)
 }
 
-// ---- Create -----------------------------------------------------------------
-
 type createArgs struct {
 	TypeLabel  string         `json:"type_label"`
 	Properties map[string]any `json:"properties,omitempty"`
 }
 
-// Create brings a new entity into being.
 func Create() Tool {
 	return Tool{
 		Name:        "Create",
@@ -67,7 +57,7 @@ func Create() Tool {
 			}
 			id, err := w.Create(agent, a.TypeLabel, world.Properties(a.Properties))
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("create entity: %w", err)
 			}
 			return fmt.Sprintf("created %s #%d", a.TypeLabel, id), nil
 		},
@@ -95,14 +85,11 @@ func Create() Tool {
 	}
 }
 
-// ---- Modify -----------------------------------------------------------------
-
 type modifyArgs struct {
 	EntityID        uint64         `json:"entity_id"`
 	PropertiesPatch map[string]any `json:"properties_patch"`
 }
 
-// Modify applies a JSON merge patch to an existing entity.
 func Modify() Tool {
 	return Tool{
 		Name:        "Modify",
@@ -121,7 +108,7 @@ func Modify() Tool {
 				return "", fmt.Errorf("Modify: bad args: %w", err)
 			}
 			if err := w.Modify(agent, world.EntityID(a.EntityID), world.Properties(a.PropertiesPatch)); err != nil {
-				return "", err
+				return "", fmt.Errorf("modify entity: %w", err)
 			}
 			return fmt.Sprintf("modified #%d", a.EntityID), nil
 		},
@@ -143,14 +130,10 @@ func Modify() Tool {
 	}
 }
 
-// ---- Destroy ----------------------------------------------------------------
-
 type destroyArgs struct {
 	EntityID uint64 `json:"entity_id"`
 }
 
-// Destroy soft-deletes an entity. Relationships referencing it
-// cascade-soft-delete.
 func Destroy() Tool {
 	return Tool{
 		Name:        "Destroy",
@@ -168,7 +151,7 @@ func Destroy() Tool {
 				return "", fmt.Errorf("Destroy: bad args: %w", err)
 			}
 			if err := w.Destroy(agent, world.EntityID(a.EntityID)); err != nil {
-				return "", err
+				return "", fmt.Errorf("destroy entity: %w", err)
 			}
 			return fmt.Sprintf("destroyed #%d", a.EntityID), nil
 		},
@@ -187,15 +170,12 @@ func Destroy() Tool {
 	}
 }
 
-// ---- Relate -----------------------------------------------------------------
-
 type relateArgs struct {
 	From uint64 `json:"from_id"`
 	To   uint64 `json:"to_id"`
 	Kind string `json:"kind"`
 }
 
-// Relate declares a relationship between two live entities.
 func Relate() Tool {
 	return Tool{
 		Name:        "Relate",
@@ -216,7 +196,7 @@ func Relate() Tool {
 			}
 			id, err := w.Relate(agent, world.EntityID(a.From), world.EntityID(a.To), a.Kind)
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("relate entities: %w", err)
 			}
 			return fmt.Sprintf("relation #%d: #%d -[%s]-> #%d", id, a.From, a.Kind, a.To), nil
 		},
@@ -242,13 +222,10 @@ func Relate() Tool {
 	}
 }
 
-// ---- Unrelate ---------------------------------------------------------------
-
 type unrelateArgs struct {
 	RelID uint64 `json:"relationship_id"`
 }
 
-// Unrelate soft-deletes an existing relationship.
 func Unrelate() Tool {
 	return Tool{
 		Name:        "Unrelate",
@@ -266,7 +243,7 @@ func Unrelate() Tool {
 				return "", fmt.Errorf("Unrelate: bad args: %w", err)
 			}
 			if err := w.Unrelate(agent, world.RelationshipID(a.RelID)); err != nil {
-				return "", err
+				return "", fmt.Errorf("unrelate: %w", err)
 			}
 			return fmt.Sprintf("unrelated #%d", a.RelID), nil
 		},
@@ -284,15 +261,10 @@ func Unrelate() Tool {
 	}
 }
 
-// ---- Observe ----------------------------------------------------------------
-
 type observeArgs struct {
 	TypeLabel string `json:"type_label,omitempty"`
 }
 
-// Observe surveys the world. Returns a textual summary of matching
-// entities. Supports an optional type_label filter; richer queries
-// can be added later without changing the tool name.
 func Observe() Tool {
 	return Tool{
 		Name:        "Observe",
@@ -336,15 +308,10 @@ func Observe() Tool {
 	}
 }
 
-// ---- Reflect ----------------------------------------------------------------
-
 type reflectArgs struct {
 	Content string `json:"content"`
 }
 
-// Reflect writes a high-importance memory record. The world is not
-// affected. Returns the content and routes it into the memory
-// stream.
 func Reflect() Tool {
 	return Tool{
 		Name:        "Reflect",
@@ -376,26 +343,18 @@ func Reflect() Tool {
 	}
 }
 
-// ---- SpawnAgent -------------------------------------------------------------
-
-// SpawnAgentArgs is the public arg struct so the sim adapter can
-// decode the call before forwarding to its multi-agent runtime.
 type SpawnAgentArgs struct {
 	Name         string             `json:"name"`
 	SystemPrompt string             `json:"system_prompt"`
 	BrainConfig  map[string]any     `json:"brain_config,omitempty"`
 	GrantedTools []string           `json:"granted_tools,omitempty"`
 	Drives       map[string]float64 `json:"drives,omitempty"`
-	// InheritMacros, when nil, defaults to true: the child inherits
-	// every macro the parent has defined. Set to false to start the
-	// child with an empty macro set.
+
 	InheritMacros *bool `json:"inherit_macros,omitempty"`
 }
 
-// alias for backwards compatibility within this file.
 type spawnAgentArgs = SpawnAgentArgs
 
-// SpawnAgent creates an agent-entity and attaches a brain to it.
 func SpawnAgent() Tool {
 	return Tool{
 		Name:        "SpawnAgent",
@@ -436,7 +395,7 @@ func SpawnAgent() Tool {
 			}
 			id, err := w.Create(agent, "agent", props)
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("spawn agent: %w", err)
 			}
 			return fmt.Sprintf("spawned agent #%d (entity only - sim attaches the brain)", id), nil
 		},
@@ -445,17 +404,10 @@ func SpawnAgent() Tool {
 	}
 }
 
-// ---- Speak ------------------------------------------------------------------
-
-// SpeakArgs is the public arg struct so the sim adapter can decode
-// the call before forwarding to the per-world inbox.
 type SpeakArgs struct {
 	Content string `json:"content"`
 }
 
-// Speak broadcasts a string to every other agent in the world. The
-// sim layer intercepts this tool; its Apply func here is a no-op
-// safety stub.
 func Speak() Tool {
 	return Tool{
 		Name:        "Speak",
@@ -485,10 +437,6 @@ func Speak() Tool {
 	}
 }
 
-// ---- DefineTool -------------------------------------------------------------
-
-// DefineToolArgs is the public arg struct so the sim adapter can
-// decode the call before forwarding to its macro registry.
 type DefineToolArgs struct {
 	Name        string           `json:"name"`
 	Description string           `json:"description,omitempty"`
@@ -496,17 +444,11 @@ type DefineToolArgs struct {
 	Steps       []DefineToolStep `json:"steps"`
 }
 
-// DefineToolStep mirrors macros.Step in the agent-facing JSON shape.
 type DefineToolStep struct {
 	Tool string         `json:"tool"`
 	Args map[string]any `json:"args,omitempty"`
 }
 
-// DefineTool lets the agent author a named macro - a parameterised
-// sequence of existing primitive tool calls. The macro persists in
-// the world event log so it is rehydrated on restart and replayed
-// exactly. The sim layer intercepts this tool; its Apply func is a
-// no-op safety stub.
 func DefineTool() Tool {
 	return Tool{
 		Name: "DefineTool",
@@ -539,19 +481,10 @@ func DefineTool() Tool {
 	}
 }
 
-// ---- Die --------------------------------------------------------------------
-
-// DieArgs is the public arg struct so the sim adapter can decode
-// the call. Die takes no required arguments; an optional final
-// thought is recorded with the death event.
 type DieArgs struct {
 	Final string `json:"final,omitempty"`
 }
 
-// Die signals the agent's intent to terminate. The sim layer
-// intercepts this tool: it computes a memory digest, hands the
-// digest to every direct child, soft-destroys the agent's entity,
-// and removes the agent from the runtime roster.
 func Die() Tool {
 	return Tool{
 		Name:        "Die",
@@ -569,13 +502,10 @@ func Die() Tool {
 	}
 }
 
-// ---- Wait -------------------------------------------------------------------
-
 type waitArgs struct {
 	N uint64 `json:"n"`
 }
 
-// Wait skips n ticks without acting.
 func Wait() Tool {
 	return Tool{
 		Name:        "Wait",
@@ -607,21 +537,11 @@ func Wait() Tool {
 	}
 }
 
-// ---- Zoom -------------------------------------------------------------------
-
-// ZoomArgs is the public arg struct so the sim adapter can decode
-// the call before forwarding to per-agent focus state.
 type ZoomArgs struct {
 	EntityID uint64 `json:"entity_id"`
 	Turns    int    `json:"turns,omitempty"`
 }
 
-// Zoom pins a focus entity on the calling agent for N turns. The
-// agent's next perceptions include a FocusView with the focused
-// entity's "contains" sub-tree, so the brain can drill into one
-// region without being distracted by the global entity list.
-// Intercepted in the sim layer because Apply only mutates the
-// world; per-agent focus state lives on Agent.
 func Zoom() Tool {
 	return Tool{
 		Name:        "Zoom",
@@ -659,10 +579,6 @@ func Zoom() Tool {
 	}
 }
 
-// ---- Unzoom -----------------------------------------------------------------
-
-// Unzoom releases the agent's current focus before its scheduled
-// expiry. Intercepted in the sim layer.
 func Unzoom() Tool {
 	return Tool{
 		Name:        "Unzoom",
@@ -678,8 +594,6 @@ func Unzoom() Tool {
 	}
 }
 
-// ---- FindByType -------------------------------------------------------------
-
 type findByTypeArgs struct {
 	TypeLabel string `json:"type_label"`
 }
@@ -690,9 +604,6 @@ type findHit struct {
 	Name string `json:"name,omitempty"`
 }
 
-// FindByType lists every live entity whose TypeLabel matches the
-// argument. Read-only; returns a JSON object the brain can parse on
-// its next turn.
 func FindByType() Tool {
 	return Tool{
 		Name:        "FindByType",
@@ -735,16 +646,11 @@ func FindByType() Tool {
 	}
 }
 
-// ---- FindByProperty ---------------------------------------------------------
-
 type findByPropertyArgs struct {
 	Key   string `json:"key"`
 	Value any    `json:"value"`
 }
 
-// FindByProperty lists every live entity whose Properties[Key]
-// equals Value (compared after JSON round-trip so numbers, bools,
-// and strings work). Read-only.
 func FindByProperty() Tool {
 	return Tool{
 		Name:        "FindByProperty",
@@ -762,46 +668,45 @@ func FindByProperty() Tool {
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return "", fmt.Errorf("FindByProperty: bad args: %w", err)
 			}
-			if a.Key == "" {
-				return "", errors.New("FindByProperty: key must be non-empty")
-			}
-			hits := []findHit{}
-			for _, e := range w.Entities() {
-				got, ok := e.Properties[a.Key]
-				if !ok {
-					continue
-				}
-				if !propsEqual(got, a.Value) {
-					continue
-				}
-				hits = append(hits, findHit{ID: uint64(e.ID), Type: e.TypeLabel, Name: stringProp(e.Properties, "name")})
-			}
-			return encodeMatches(hits)
+			return findByProperty(w, a)
 		},
-		RandomArgs: func(rng *rand.Rand, p brain.Perception) (json.RawMessage, bool) {
-			// Pick a random alive entity and one of its properties as
-			// the target. Returns nil if no entity has any property.
-			for tries := 0; tries < 4 && len(p.AliveEntities) > 0; tries++ {
-				e := p.AliveEntities[rng.IntN(len(p.AliveEntities))]
-				if len(e.Properties) == 0 {
-					continue
-				}
-				keys := make([]string, 0, len(e.Properties))
-				for k := range e.Properties {
-					keys = append(keys, k)
-				}
-				k := keys[rng.IntN(len(keys))]
-				b, err := json.Marshal(findByPropertyArgs{Key: k, Value: e.Properties[k]})
-				if err == nil {
-					return b, true
-				}
-			}
-			return nil, false
-		},
+		RandomArgs: randomFindByPropertyArgs,
 	}
 }
 
-// ---- FindRelated ------------------------------------------------------------
+func findByProperty(w *world.World, a findByPropertyArgs) (string, error) {
+	if a.Key == "" {
+		return "", errors.New("FindByProperty: key must be non-empty")
+	}
+	hits := []findHit{}
+	for _, e := range w.Entities() {
+		got, ok := e.Properties[a.Key]
+		if !ok || !propsEqual(got, a.Value) {
+			continue
+		}
+		hits = append(hits, findHit{ID: uint64(e.ID), Type: e.TypeLabel, Name: stringProp(e.Properties, "name")})
+	}
+	return encodeMatches(hits)
+}
+
+func randomFindByPropertyArgs(rng *rand.Rand, p brain.Perception) (json.RawMessage, bool) {
+	for tries := 0; tries < 4 && len(p.AliveEntities) > 0; tries++ {
+		e := p.AliveEntities[rng.IntN(len(p.AliveEntities))]
+		if len(e.Properties) == 0 {
+			continue
+		}
+		keys := make([]string, 0, len(e.Properties))
+		for k := range e.Properties {
+			keys = append(keys, k)
+		}
+		k := keys[rng.IntN(len(keys))]
+		b, err := json.Marshal(findByPropertyArgs{Key: k, Value: e.Properties[k]})
+		if err == nil {
+			return b, true
+		}
+	}
+	return nil, false
+}
 
 type findRelatedArgs struct {
 	EntityID uint64 `json:"entity_id"`
@@ -813,11 +718,9 @@ type relatedHit struct {
 	Type      string `json:"type"`
 	Name      string `json:"name,omitempty"`
 	Kind      string `json:"kind"`
-	Direction string `json:"direction"` // "outgoing" if entity is From; "incoming" if To
+	Direction string `json:"direction"`
 }
 
-// FindRelated lists every live entity related to the given entity,
-// optionally filtered by relationship kind. Read-only.
 func FindRelated() Tool {
 	return Tool{
 		Name:        "FindRelated",
@@ -835,72 +738,81 @@ func FindRelated() Tool {
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return "", fmt.Errorf("FindRelated: bad args: %w", err)
 			}
-			if a.EntityID == 0 {
-				return "", errors.New("FindRelated: entity_id must be > 0")
-			}
-			target := world.EntityID(a.EntityID)
-			byID := make(map[world.EntityID]world.Entity)
-			for _, e := range w.Entities() {
-				byID[e.ID] = e
-			}
-			hits := []relatedHit{}
-			for _, r := range w.Relationships() {
-				var otherID world.EntityID
-				var direction string
-				switch {
-				case r.From == target:
-					otherID, direction = r.To, "outgoing"
-				case r.To == target:
-					otherID, direction = r.From, "incoming"
-				default:
-					continue
-				}
-				if a.Kind != "" && r.Kind != a.Kind {
-					continue
-				}
-				other, ok := byID[otherID]
-				if !ok {
-					continue
-				}
-				hits = append(hits, relatedHit{
-					ID:        uint64(other.ID),
-					Type:      other.TypeLabel,
-					Name:      stringProp(other.Properties, "name"),
-					Kind:      r.Kind,
-					Direction: direction,
-				})
-			}
-			out := struct {
-				Matches []relatedHit `json:"matches"`
-				Count   int          `json:"count"`
-			}{Matches: hits, Count: len(hits)}
-			b, err := json.Marshal(out)
-			if err != nil {
-				return "", fmt.Errorf("FindRelated: encode result: %w", err)
-			}
-			return string(b), nil
+			return findRelated(w, a)
 		},
-		RandomArgs: func(rng *rand.Rand, p brain.Perception) (json.RawMessage, bool) {
-			if len(p.AliveEntities) == 0 {
-				return nil, false
-			}
-			e := p.AliveEntities[rng.IntN(len(p.AliveEntities))]
-			args := findRelatedArgs{EntityID: e.ID}
-			// Half the time, also filter by a random observed relation kind.
-			if len(p.AliveRelationships) > 0 && rng.IntN(2) == 0 {
-				args.Kind = p.AliveRelationships[rng.IntN(len(p.AliveRelationships))].Kind
-			}
-			b, err := json.Marshal(args)
-			if err != nil {
-				return nil, false
-			}
-			return b, true
-		},
+		RandomArgs: randomFindRelatedArgs,
 	}
 }
 
-// encodeMatches packages a list of findHits into the standard JSON
-// envelope used by FindByType and FindByProperty.
+func findRelated(w *world.World, a findRelatedArgs) (string, error) {
+	if a.EntityID == 0 {
+		return "", errors.New("FindRelated: entity_id must be > 0")
+	}
+	target := world.EntityID(a.EntityID)
+	byID := make(map[world.EntityID]world.Entity)
+	for _, e := range w.Entities() {
+		byID[e.ID] = e
+	}
+	hits := []relatedHit{}
+	for _, r := range w.Relationships() {
+		if hit, ok := relatedHitFor(r, target, a.Kind, byID); ok {
+			hits = append(hits, hit)
+		}
+	}
+	out := struct {
+		Matches []relatedHit `json:"matches"`
+		Count   int          `json:"count"`
+	}{Matches: hits, Count: len(hits)}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return "", fmt.Errorf("FindRelated: encode result: %w", err)
+	}
+	return string(b), nil
+}
+
+func relatedHitFor(r world.Relationship, target world.EntityID, kind string, byID map[world.EntityID]world.Entity) (relatedHit, bool) {
+	var otherID world.EntityID
+	var direction string
+	switch {
+	case r.From == target:
+		otherID, direction = r.To, "outgoing"
+	case r.To == target:
+		otherID, direction = r.From, "incoming"
+	default:
+		return relatedHit{}, false
+	}
+	if kind != "" && r.Kind != kind {
+		return relatedHit{}, false
+	}
+	other, ok := byID[otherID]
+	if !ok {
+		return relatedHit{}, false
+	}
+	return relatedHit{
+		ID:        uint64(other.ID),
+		Type:      other.TypeLabel,
+		Name:      stringProp(other.Properties, "name"),
+		Kind:      r.Kind,
+		Direction: direction,
+	}, true
+}
+
+func randomFindRelatedArgs(rng *rand.Rand, p brain.Perception) (json.RawMessage, bool) {
+	if len(p.AliveEntities) == 0 {
+		return nil, false
+	}
+	e := p.AliveEntities[rng.IntN(len(p.AliveEntities))]
+	args := findRelatedArgs{EntityID: e.ID}
+	if len(p.AliveRelationships) > 0 && rng.IntN(2) == 0 {
+		args.Kind = p.AliveRelationships[rng.IntN(len(p.AliveRelationships))].Kind
+	}
+	b, err := json.Marshal(args)
+	if err != nil {
+		return nil, false
+	}
+	return b, true
+}
+
 func encodeMatches(hits []findHit) (string, error) {
 	out := struct {
 		Matches []findHit `json:"matches"`
@@ -908,7 +820,7 @@ func encodeMatches(hits []findHit) (string, error) {
 	}{Matches: hits, Count: len(hits)}
 	b, err := json.Marshal(out)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("marshal matches: %w", err)
 	}
 	return string(b), nil
 }
@@ -923,11 +835,6 @@ func stringProp(p world.Properties, key string) string {
 	return ""
 }
 
-// propsEqual compares two property values for equality after a JSON
-// round-trip on the right-hand side. Properties values are
-// JSON-shaped (string, float64, bool, nil, []any, map[string]any) so
-// this is a defensible comparison: it matches what callers actually
-// observe through the API.
 func propsEqual(got, want any) bool {
 	wb, err := json.Marshal(want)
 	if err != nil {
@@ -940,16 +847,10 @@ func propsEqual(got, want any) bool {
 	return string(wb) == string(gb)
 }
 
-// ---- shared fixtures for RandomArgs -----------------------------------------
-
 func pick[T any](rng *rand.Rand, xs []T) T {
 	return xs[rng.IntN(len(xs))]
 }
 
-// nonAgentEntities filters out entities whose type_label is "agent"
-// so the stub brain never targets another agent (including its own
-// entity) with Modify or Destroy. Real brains can decide for
-// themselves.
 func nonAgentEntities(in []brain.EntityView) []brain.EntityView {
 	out := in[:0:0]
 	for _, e := range in {
@@ -961,11 +862,6 @@ func nonAgentEntities(in []brain.EntityView) []brain.EntityView {
 	return out
 }
 
-// containerEntities returns the EntityIDs of non-agent entities that
-// have at least one outgoing "contains" relationship. Used by
-// Zoom.RandomArgs so the stub brain pins focus only on entities the
-// frontier could actually drill into. Returns an empty slice when
-// the world has no containment structure yet.
 func containerEntities(ents []brain.EntityView, rels []brain.RelationshipView) []uint64 {
 	hasChild := make(map[uint64]bool, len(ents))
 	for _, r := range rels {

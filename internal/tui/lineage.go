@@ -6,9 +6,6 @@ import (
 	"strings"
 )
 
-// RenderLineage renders the agent roster as a parent->child tree.
-// Dead agents are marked with a [dead] suffix. The output is plain
-// indented text suitable for the lineage overlay (key "l").
 func RenderLineage(agents []AgentInfo, s Styles) string {
 	if len(agents) == 0 {
 		return s.Faint.Render("(no agents)")

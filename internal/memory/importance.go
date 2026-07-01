@@ -6,20 +6,12 @@ import (
 	"unicode/utf8"
 )
 
-// Importance is the contract every importance scorer satisfies.
-// Scores are on a 0..10 scale to match Smallville. The Heuristic
-// implementation is the default; LLMScorer opts into a cheap-LLM
-// scorer using the agent's configured brain.
 type Importance interface {
 	Score(ctx context.Context, kind Kind, content string) (float64, error)
 }
 
-// HeuristicScorer is a fast, dependency-free importance scorer that
-// uses kind + length signals. Calibrated so action/outcome land
-// around 5, observations around 3, reflections around 8.
 type HeuristicScorer struct{}
 
-// Score implements Importance.
 func (HeuristicScorer) Score(_ context.Context, kind Kind, content string) (float64, error) {
 	base := 4.0
 	switch kind {

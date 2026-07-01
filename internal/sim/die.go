@@ -14,18 +14,11 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// Inheritance digest defaults. Each child of a dying agent receives
-// up to TopKReflections + TopNRaw memory records, written into its
-// stream as memory.KindInheritance.
 const (
 	defaultTopKReflections = 5
 	defaultTopNRaw         = 10
 )
 
-// handleDie computes a memory digest, hands it to every direct child
-// of the dying agent, soft-destroys the agent's entity, marks the
-// runtime dead, and appends an EventDie. Final words (if any) are
-// recorded on the event.
 func (s *Sim) handleDie(ctx context.Context, ag *agent.Agent, raw json.RawMessage, tick world.Tick) (string, error) {
 	var a tools.DieArgs
 	if len(raw) > 0 {
@@ -74,8 +67,6 @@ func (s *Sim) handleDie(ctx context.Context, ag *agent.Agent, raw json.RawMessag
 		ag.Name, len(children), len(digest)), nil
 }
 
-// directChildrenLocked returns the agents whose ParentEntityID
-// matches parentID. Caller must hold s.mu.
 func (s *Sim) directChildrenLocked(parentID world.EntityID) []*agent.Agent {
 	var out []*agent.Agent
 	for _, a := range s.agents {
@@ -86,9 +77,6 @@ func (s *Sim) directChildrenLocked(parentID world.EntityID) []*agent.Agent {
 	return out
 }
 
-// buildInheritanceDigest selects up to topK reflection records and
-// topN highest-importance non-reflection records from the agent's
-// memory stream, formatted as inheritance entries.
 func buildInheritanceDigest(ag *agent.Agent, topK, topN int) []string {
 	if ag == nil || ag.Memory == nil {
 		return nil

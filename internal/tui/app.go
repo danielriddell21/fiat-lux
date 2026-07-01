@@ -11,32 +11,19 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// RunOptions configures a TUI session.
 type RunOptions struct {
-	// World is the world the TUI is attached to. Required.
 	World *world.World
 
-	// Store is optional; when nil the save keybind reports that no
-	// store is configured.
 	Store Storer
 
-	// Sim is optional; when nil the TUI runs as a passive viewer.
-	// When set, the model schedules sim ticks at the configured
-	// interval and unpause runs the creator.
 	Sim Stepper
 
-	// TickInterval overrides the default sim tick interval. Zero
-	// means use DefaultTickInterval.
 	TickInterval time.Duration
 
-	// Input and Output let tests inject a virtual terminal. When nil,
-	// bubbletea defaults to os.Stdin / os.Stdout.
 	Input  io.Reader
 	Output io.Writer
 }
 
-// Run blocks while the TUI is on screen and returns once the user
-// quits. ctx cancellation triggers a clean shutdown.
 func Run(ctx context.Context, opts RunOptions) error {
 	if opts.World == nil {
 		return fmt.Errorf("tui: World is required")

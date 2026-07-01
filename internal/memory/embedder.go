@@ -14,41 +14,23 @@ import (
 	"time"
 )
 
-// Embedder turns text into a fixed-dimension embedding vector.
-// Implementations may call out to a network service or compute
-// locally. The pipeline tolerates a nil embedder - relevance simply
-// contributes zero to the combined retrieval score.
 type Embedder interface {
 	Embed(ctx context.Context, text string) ([]float64, error)
 	Close() error
 }
 
-// ZeroEmbedder returns a zero-norm vector for every text. Cosine
-// similarity against any other vector is zero, so relevance
-// contributes nothing - retrieval falls back to recency *
-// importance. This is the safe default when no embedder is
-// configured.
 type ZeroEmbedder struct{}
 
-// Embed returns a fixed-size zero vector.
 func (ZeroEmbedder) Embed(_ context.Context, _ string) ([]float64, error) {
 	return []float64{0}, nil
 }
 
-// Close is a no-op.
 func (ZeroEmbedder) Close() error { return nil }
 
-// HashEmbedder is a deterministic, dependency-free embedder useful
-// in tests: it produces a normalised vector seeded by an FNV hash of
-// the input. Identical inputs produce identical vectors; different
-// inputs produce uncorrelated vectors. Not appropriate for
-// production semantic retrieval - it has no notion of meaning -
-// but excellent for verifying the retrieval pipeline.
 type HashEmbedder struct {
 	Dim int
 }
 
-// Embed implements Embedder using a fast, deterministic hash.
 func (h HashEmbedder) Embed(_ context.Context, text string) ([]float64, error) {
 	dim := h.Dim
 	if dim <= 0 {
@@ -56,7 +38,7 @@ func (h HashEmbedder) Embed(_ context.Context, text string) ([]float64, error) {
 	}
 	v := make([]float64, dim)
 	hasher := fnv.New64a()
-	for i := 0; i < dim; i++ {
+	for i := range dim {
 		hasher.Reset()
 		_, _ = io.WriteString(hasher, text)
 		_, _ = fmt.Fprintf(hasher, "|%d", i)
@@ -79,25 +61,20 @@ func (h HashEmbedder) Embed(_ context.Context, text string) ([]float64, error) {
 	return v, nil
 }
 
-// Close is a no-op.
 func (HashEmbedder) Close() error { return nil }
 
-// OllamaEmbedder calls Ollama's /api/embeddings endpoint with the
-// configured model. Default model is nomic-embed-text.
 type OllamaEmbedder struct {
 	baseURL string
 	model   string
 	client  *http.Client
 }
 
-// OllamaOptions configures an OllamaEmbedder.
 type OllamaOptions struct {
-	BaseURL    string // default http://localhost:11434
-	Model      string // default nomic-embed-text
+	BaseURL    string
+	Model      string
 	HTTPClient *http.Client
 }
 
-// NewOllama constructs an OllamaEmbedder.
 func NewOllama(opts OllamaOptions) *OllamaEmbedder {
 	base := strings.TrimRight(opts.BaseURL, "/")
 	if base == "" {
@@ -122,7 +99,6 @@ type ollamaResp struct {
 	Embedding []float64 `json:"embedding"`
 }
 
-// Embed calls the Ollama embeddings endpoint.
 func (e *OllamaEmbedder) Embed(ctx context.Context, text string) ([]float64, error) {
 	body, _ := json.Marshal(ollamaReq{Model: e.model, Prompt: text})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/api/embeddings", bytes.NewReader(body))
@@ -149,11 +125,8 @@ func (e *OllamaEmbedder) Embed(ctx context.Context, text string) ([]float64, err
 	return out.Embedding, nil
 }
 
-// Close is a no-op for the default HTTP client.
 func (e *OllamaEmbedder) Close() error { return nil }
 
-// OpenAIEmbedder calls OpenAI's /v1/embeddings endpoint. Used for
-// cloud users who don't want a local embedder.
 type OpenAIEmbedder struct {
 	baseURL string
 	apiKey  string
@@ -161,15 +134,13 @@ type OpenAIEmbedder struct {
 	client  *http.Client
 }
 
-// OpenAIOptions configures an OpenAIEmbedder.
 type OpenAIOptions struct {
-	BaseURL    string // default https://api.openai.com/v1
-	APIKey     string // required
-	Model      string // default text-embedding-3-small
+	BaseURL    string
+	APIKey     string
+	Model      string
 	HTTPClient *http.Client
 }
 
-// NewOpenAI constructs an OpenAIEmbedder.
 func NewOpenAI(opts OpenAIOptions) (*OpenAIEmbedder, error) {
 	if opts.APIKey == "" {
 		return nil, errors.New("openai embedder: APIKey is required")
@@ -199,7 +170,6 @@ type openAIResp struct {
 	} `json:"data"`
 }
 
-// Embed calls the OpenAI embeddings endpoint.
 func (e *OpenAIEmbedder) Embed(ctx context.Context, text string) ([]float64, error) {
 	body, _ := json.Marshal(openAIReq{Model: e.model, Input: text})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/embeddings", bytes.NewReader(body))
@@ -227,5 +197,4 @@ func (e *OpenAIEmbedder) Embed(ctx context.Context, text string) ([]float64, err
 	return out.Data[0].Embedding, nil
 }
 
-// Close is a no-op for the default HTTP client.
 func (e *OpenAIEmbedder) Close() error { return nil }

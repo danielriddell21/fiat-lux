@@ -9,24 +9,10 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/brain"
 )
 
-// LLMScorer asks the configured brain to rate a memory's importance
-// on a 0-10 scale. Opt-in via:
-//
-//	--importance=llm
-//
-// Each Add becomes an extra brain call so this is meaningfully more
-// expensive than the heuristic default; meant for cloud users who
-// care about retrieval quality and have budget.
 type LLMScorer struct {
-	// Brain is the model used for scoring. We pass the agent's own
-	// brain; multi-brain configs could route this to a cheaper model
-	// specifically.
 	Brain brain.Brain
 }
 
-// Score implements Importance by asking the brain for a single
-// number between 0 and 10. On any parse failure or brain error it
-// falls back to the heuristic so the pipeline keeps running.
 func (l LLMScorer) Score(ctx context.Context, kind Kind, content string) (float64, error) {
 	if l.Brain == nil {
 		return HeuristicScorer{}.Score(ctx, kind, content)
@@ -50,10 +36,6 @@ func scorePromptUser(kind Kind, content string) string {
 		kind, content)
 }
 
-// parseScore extracts the rating from the brain's response. Models
-// often phrase their answer like "On a scale of 0 to 10 I'd say 4",
-// so we take the LAST parseable number in [0,10]; ranges and prose
-// at the start of the string don't fool us.
 func parseScore(text string) (float64, bool) {
 	tokens := strings.FieldsFunc(text, func(r rune) bool {
 		return (r < '0' || r > '9') && r != '.' && r != '-'

@@ -1,0 +1,1576 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"math/rand/v2"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/danielriddell21/fiat-lux/internal/brain"
+	"github.com/danielriddell21/fiat-lux/internal/brain/anthropic"
+	"github.com/danielriddell21/fiat-lux/internal/brain/ollama"
+	"github.com/danielriddell21/fiat-lux/internal/brain/openai"
+	"github.com/danielriddell21/fiat-lux/internal/brain/openaicompat"
+	"github.com/danielriddell21/fiat-lux/internal/brain/stub"
+	"github.com/danielriddell21/fiat-lux/internal/imagegen"
+	imageopenai "github.com/danielriddell21/fiat-lux/internal/imagegen/openai"
+	imageopenaicompat "github.com/danielriddell21/fiat-lux/internal/imagegen/openaicompat"
+	"github.com/danielriddell21/fiat-lux/internal/memory"
+	"github.com/danielriddell21/fiat-lux/internal/narrator"
+	"github.com/danielriddell21/fiat-lux/internal/sim"
+	"github.com/danielriddell21/fiat-lux/internal/store"
+	"github.com/danielriddell21/fiat-lux/internal/tools"
+	"github.com/danielriddell21/fiat-lux/internal/tui"
+	"github.com/danielriddell21/fiat-lux/internal/webui"
+	"github.com/danielriddell21/fiat-lux/internal/world"
+)
+
+const banner = `
+   .-.   _       _    _
+  ( _ ) | | __ _| |_ | |  _   ___  __
+  / _ \ | |/ _' | __|| | | | | \ \/ /
+ | (_) || | (_| | |_ | |_| |_| |>  <
+  \___/ |_|\__,_|\__||_|\__,_|___/_/\_\
+
+  fiat-lux  -  let there be light
+`
+
+func Execute(version string) error {
+	return run(os.Args[1:], os.Stdout, os.Stderr, version)
+}
+
+func run(args []string, stdout, stderr io.Writer, version string) error {
+	if args == nil {
+		args = []string{}
+	}
+	root := newRootCmd(stdout, stderr, version)
+	root.SetArgs(args)
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	if err := root.Execute(); err != nil {
+		return fmt.Errorf("fiatlux: %w", err)
+	}
+	return nil
+}
+
+func newRootCmd(stdout, stderr io.Writer, version string) *cobra.Command {
+	root := &cobra.Command{
+		Use:           "fiatlux",
+		Short:         "Drop an AI agent into an empty world and watch it create",
+		Long:          helpText,
+		Version:       version,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return printBanner(stdout, version)
+		},
+	}
+	root.SetVersionTemplate("{{.Version}}\n")
+	root.AddCommand(
+		cmdRun(stdout, stderr),
+		cmdReplay(stdout, stderr),
+		cmdStep(stdout, stderr),
+		cmdServe(stdout, stderr),
+		completionCmd(),
+	)
+	return root
+}
+
+func printBanner(out io.Writer, version string) error {
+	_, _ = fmt.Fprint(out, banner)
+	_, _ = fmt.Fprintf(out, "\n  version: %s\n", version)
+	_, _ = fmt.Fprintln(out, "  try 'fiatlux run' for the TUI, 'fiatlux serve' for the web viewer, or 'fiatlux help' for options.")
+	return nil
+}
+
+const helpText = `Usage:
+
+  fiatlux                       Print banner and version.
+  fiatlux run [flags]           Launch the TUI.
+  fiatlux replay --db <dsn> --world <name> [--replay-tick <duration>]
+                                Replay a saved world tick by tick.
+  fiatlux step --count N [flags]
+                                Run the sim headlessly for N steps and
+                                print a summary. No TUI, no /dev/tty
+                                required. Useful for CI smoke tests
+                                and benchmarks. Accepts the same brain
+                                / embedder / db / config flags as run,
+                                plus --json for machine-readable output.
+  fiatlux serve [flags]         Run the sim headlessly with the embedded
+                                web viewer attached. No TUI. Suitable for
+                                container deployments. Accepts the same
+                                flags as run; --web-addr defaults to
+                                :8080.
+
+run flags:
+  --world <name>      Name of the world to open or create.    (default: kosmos)
+  --db <dsn>          Database DSN. Empty = in-memory, no persistence.
+                      Local file:    ./kosmos.db, /abs/foo.db, :memory:
+                      Local URI:     file:./foo.db?_journal_mode=WAL
+                      libSQL remote: libsql://<host>?authToken=...
+                                     http(s)://<sqld-host>:<port>
+                                     ws(s)://<host>?authToken=...
+  --brain <spec>      Brain config. Supported:
+                        stub                        random valid tool calls (default; free)
+                        stub:<seed>                 deterministic stub
+                        anthropic[:<model>]         Messages API (env: ANTHROPIC_API_KEY)
+                        openai[:<model>]            Chat Completions (env: OPENAI_API_KEY)
+                        ollama[:<model>]            local OpenAI-compatible endpoint
+                        openaicompat:<url>::<model> generic OpenAI-compatible endpoint
+                                                    (env: FIATLUX_OPENAICOMPAT_KEY for auth)
+                        none                        no sim; viewer only
+  --tick <duration>   Sim tick interval.                       (default: 1.5s)
+  --embedder <spec>   Memory embedder for relevance retrieval:
+                        zero                     (default; no relevance contribution)
+                        hash                     (deterministic, free, useful for tests)
+                        ollama[:<model>]         local Ollama embeddings
+                        openai[:<model>]         OpenAI embeddings (uses OPENAI_API_KEY)
+  --importance <spec> Memory importance scorer:
+                        heuristic                (default; free, kind+length signals)
+                        llm                      (extra brain call per memory)
+  --reflect-interval  Ticks between reflection passes. 0 disables. (default: 20)
+  --max-agents <n>    Cap on total agents per world.              (default: 8)
+  --max-spawn-depth   Cap on the spawn graph height.              (default: 3)
+  --config <path>     YAML config for a multi-world universe.
+                      Overrides --brain. See examples/cloud-haiku.yaml.
+  --web-addr <addr>   Bind the embedded web viewer at this address
+                      (e.g. 127.0.0.1:8080). Empty = disabled.
+                      Also configurable via the YAML config's
+                      'web.addr' key; the flag wins when both set.
+  --save-mode <mode>  Persistence cadence. Requires --db.
+                        manual              user presses 's' (default)
+                        interval:<dur>      periodic background save,
+                                            e.g. interval:30s
+                      Also configurable via YAML 'save.mode'; the
+                      flag wins when both set.`
+
+func cmdRun(stdout, stderr io.Writer) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:          "run",
+		Short:        "Launch the TUI",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+	}
+	f := cmd.Flags()
+	worldName := f.String("world", "kosmos", "name of the world to open or create")
+	dbPath := f.String("db", "", "SQLite database path (empty = in-memory, no persistence)")
+	brainSpec := f.String("brain", "stub", "brain config; see 'fiatlux help'")
+	tickInterval := f.Duration("tick", tui.DefaultTickInterval, "sim tick interval")
+	embedderSpec := f.String("embedder", "zero", "memory embedder (zero | hash | ollama[:model] | openai[:model])")
+	importanceSpec := f.String("importance", "heuristic", "memory importance scorer (heuristic | llm)")
+	reflectInterval := f.Uint64("reflect-interval", 20, "ticks between reflection passes (0 = disable)")
+	maxAgents := f.Int("max-agents", 8, "cap on total agents per world")
+	maxSpawnDepth := f.Int("max-spawn-depth", 3, "cap on the spawn graph height")
+	configPath := f.String("config", "", "YAML config for a multi-world universe (overrides --brain)")
+	webAddr := f.String("web-addr", "", "address to bind the optional web viewer (e.g. 127.0.0.1:8080)")
+	saveMode := f.String("save-mode", "", "persistence cadence: manual | interval:<duration> (e.g. interval:30s)")
+	multimodalSpec := f.String("multimodal", "", "image generator: '' (use YAML or disabled) | none | openai[:model] | openaicompat:<base_url>::<model>")
+	imageCacheDir := f.String("image-cache", "", "directory for generated images (default: $XDG_CACHE_HOME/fiatlux/images)")
+	narratorSpec := f.String("narrator", "", "global narrator brain spec (overrides YAML); '' = use YAML, 'none' = disable")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		return runRun(stdout, stderr, runFlags{
+			worldName: *worldName, dbPath: *dbPath, brainSpec: *brainSpec,
+			tickInterval: *tickInterval, embedderSpec: *embedderSpec, importanceSpec: *importanceSpec,
+			reflectInterval: *reflectInterval, maxAgents: *maxAgents, maxSpawnDepth: *maxSpawnDepth,
+			configPath: *configPath, webAddr: *webAddr, saveMode: *saveMode,
+			multimodalSpec: *multimodalSpec, imageCacheDir: *imageCacheDir, narratorSpec: *narratorSpec,
+		})
+	}
+	return cmd
+}
+
+type runFlags struct {
+	worldName, dbPath, brainSpec  string
+	tickInterval                  time.Duration
+	embedderSpec, importanceSpec  string
+	reflectInterval               uint64
+	maxAgents, maxSpawnDepth      int
+	configPath, webAddr, saveMode string
+	multimodalSpec, imageCacheDir string
+	narratorSpec                  string
+}
+
+func runRun(stdout, stderr io.Writer, fl runFlags) error {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	st, closeStore, err := openStore(ctx, fl.dbPath)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+
+	w, err := loadOrNewWorld(ctx, st, fl.worldName)
+	if err != nil {
+		return err
+	}
+
+	rc, err := buildRunComponents(ctx, w, st, runComponentOpts{
+		embedderSpec:  fl.embedderSpec,
+		configPath:    fl.configPath,
+		brainSpec:     fl.brainSpec,
+		importance:    fl.importanceSpec,
+		reflect:       fl.reflectInterval,
+		maxAgents:     fl.maxAgents,
+		maxSpawnDepth: fl.maxSpawnDepth,
+	})
+	if err != nil {
+		return err
+	}
+	defer rc.cleanup()
+	w = rc.world
+	stepper := rc.stepper
+	simProvider := rc.simProvider
+	attachOnSims := rc.attachOnSims
+	simForWorld := rc.simForWorld
+	yamlWebAddr := rc.yamlWebAddr
+	yamlSaveMode := rc.yamlSaveMode
+	yamlMultimodal := rc.yamlMultimodal
+	yamlImageCache := rc.yamlImageCache
+	yamlMultimodalMM := rc.yamlMultimodalMM
+
+	// Wrap st with a full-saver so manual 's' and autosave persist
+	// memory alongside world events.
+	if dbStore, ok := st.(*store.Store); ok && simForWorld != nil {
+		st = &fullSaver{store: dbStore, simForWorld: simForWorld}
+	}
+
+	// Each resolved setting takes the CLI flag when set, else the YAML value.
+	// (For multimodal, blank CLI means "use YAML"; explicit "none" disables.)
+	imageCache, err := setupMultimodal(attachOnSims,
+		firstNonEmpty(fl.multimodalSpec, yamlMultimodal),
+		firstNonEmpty(fl.imageCacheDir, yamlImageCache), yamlMultimodalMM)
+	if err != nil {
+		return err
+	}
+
+	// Apply the --narrator CLI override after sims are built. Blank
+	// means "use whatever YAML configured"; "none" disables on every
+	// world; any other spec installs a narrator on every world with
+	// that brain.
+	if err := applyNarratorOverride(fl.narratorSpec, attachOnSims); err != nil {
+		return fmt.Errorf("narrator: %w", err)
+	}
+
+	resolvedWebAddr := firstNonEmpty(fl.webAddr, yamlWebAddr)
+	if resolvedWebAddr != "" && simProvider != nil {
+		stop, err := startWebUI(resolvedWebAddr, simProvider, attachOnSims, imageCache, stderr)
+		if err != nil {
+			return err
+		}
+		defer stop()
+	}
+
+	if err := startAutosave(ctx, st, w, firstNonEmpty(fl.saveMode, yamlSaveMode), stderr); err != nil {
+		return err
+	}
+
+	if err := tui.Run(ctx, tui.RunOptions{
+		World:        w,
+		Store:        st,
+		Sim:          stepper,
+		TickInterval: fl.tickInterval,
+		Output:       stdout,
+	}); err != nil {
+		return fmt.Errorf("run tui: %w", err)
+	}
+	return nil
+}
+
+func setupMultimodal(sims []*sim.Sim, spec, cacheDir string, minProps int) (*imagegen.Cache, error) {
+	mmOpts, cache, err := buildMultimodal(spec, cacheDir)
+	if err != nil {
+		return nil, fmt.Errorf("multimodal: %w", err)
+	}
+	if mmOpts != nil {
+		if minProps > 0 {
+			mmOpts.MinPropsCount = minProps
+		}
+		for _, s := range sims {
+			s.SetMultimodal(mmOpts)
+		}
+	}
+	return cache, nil
+}
+
+func startAutosave(ctx context.Context, st tui.Storer, w *world.World, saveMode string, stderr io.Writer) error {
+	mode, err := store.ParseSaveMode(saveMode)
+	if err != nil {
+		return fmt.Errorf("parse save-mode: %w", err)
+	}
+	if mode.Kind != "interval" {
+		return nil
+	}
+	concreteStore, ok := st.(store.Saver)
+	if !ok || concreteStore == nil {
+		return fmt.Errorf("save-mode interval requires --db; no store attached")
+	}
+	go func() {
+		err := store.RunAutosave(ctx, concreteStore, w, mode.Interval, func(saveErr error) {
+			_, _ = fmt.Fprintln(stderr, "autosave:", saveErr)
+		})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			_, _ = fmt.Fprintln(stderr, "autosave:", err)
+		}
+	}()
+	return nil
+}
+
+type runComponentOpts struct {
+	embedderSpec  string
+	configPath    string
+	brainSpec     string
+	importance    string
+	reflect       uint64
+	maxAgents     int
+	maxSpawnDepth int
+}
+
+type runComponents struct {
+	world            *world.World
+	stepper          tui.Stepper
+	simProvider      webui.SimProvider
+	attachOnSims     []*sim.Sim
+	simForWorld      func(name string) *sim.Sim
+	yamlWebAddr      string
+	yamlSaveMode     string
+	yamlMultimodal   string
+	yamlImageCache   string
+	yamlMultimodalMM int
+	cleanup          func()
+}
+
+func buildRunComponents(ctx context.Context, w *world.World, st tui.Storer, o runComponentOpts) (*runComponents, error) {
+	switch {
+	case o.configPath != "":
+		return buildUniverseComponents(ctx, st, o)
+	case o.brainSpec != "none":
+		return buildSimComponents(ctx, w, st, o)
+	default:
+		return &runComponents{world: w, cleanup: func() {}}, nil
+	}
+}
+
+func buildUniverseComponents(ctx context.Context, st tui.Storer, o runComponentOpts) (*runComponents, error) {
+	embedder, err := buildEmbedder(o.embedderSpec)
+	if err != nil {
+		return nil, fmt.Errorf("build embedder: %w", err)
+	}
+	u, cfg, err := loadUniverse(ctx, o.configPath, embedder, st)
+	if err != nil {
+		return nil, err
+	}
+	// Restore each world's root agent memory from the store.
+	if dbStore, ok := st.(*store.Store); ok {
+		for _, s := range u.Sims() {
+			restoreRootMemory(ctx, dbStore, s)
+		}
+	}
+	rc := &runComponents{
+		world:        u.Focused().World, // align save/load and the TUI on the focused world
+		stepper:      newUniverseAdapter(u),
+		simProvider:  func() *sim.Sim { return u.Focused() },
+		attachOnSims: u.Sims(),
+		simForWorld:  simByName(u.Sims()),
+		cleanup:      func() { _ = u.Close() },
+	}
+	if cfg != nil {
+		rc.yamlWebAddr = cfg.Web.Addr
+		rc.yamlSaveMode = cfg.Save.Mode
+		rc.yamlMultimodal = cfg.Multimodal.Spec()
+		rc.yamlImageCache = cfg.Multimodal.CacheDir
+		rc.yamlMultimodalMM = cfg.Multimodal.MinPropsCount
+	}
+	return rc, nil
+}
+
+func buildSimComponents(ctx context.Context, w *world.World, st tui.Storer, o runComponentOpts) (*runComponents, error) {
+	embedder, err := buildEmbedder(o.embedderSpec)
+	if err != nil {
+		return nil, fmt.Errorf("build embedder: %w", err)
+	}
+	s, err := buildSim(w, o.brainSpec, embedder, o.importance, o.reflect, o.maxAgents, o.maxSpawnDepth)
+	if err != nil {
+		return nil, fmt.Errorf("build sim: %w", err)
+	}
+	if dbStore, ok := st.(*store.Store); ok {
+		restoreRootMemory(ctx, dbStore, s)
+	}
+	return &runComponents{
+		world:        w,
+		stepper:      newSimAdapter(s),
+		simProvider:  func() *sim.Sim { return s },
+		attachOnSims: []*sim.Sim{s},
+		simForWorld:  simByName([]*sim.Sim{s}),
+		cleanup:      func() { _ = s.Close() },
+	}, nil
+}
+
+func startWebUI(addr string, provider webui.SimProvider, attachOn []*sim.Sim, imageCache *imagegen.Cache, stderr io.Writer) (func(), error) {
+	logger := log.New(stderr, "", log.LstdFlags)
+	server, err := webui.New(webui.Options{
+		Addr:       addr,
+		Provider:   provider,
+		Logger:     logger,
+		ImageCache: imageCache,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("web ui: %w", err)
+	}
+	for _, s := range attachOn {
+		s.Observer = chainObservers(s.Observer, server.Publish)
+	}
+	serveErr := make(chan error, 1)
+	go func() {
+		if err := server.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serveErr <- err
+		}
+		close(serveErr)
+	}()
+	// Surface a synchronous bind error quickly.
+	select {
+	case err := <-serveErr:
+		if err != nil {
+			return nil, fmt.Errorf("web ui: %w", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+	}
+	return func() {
+		shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutCtx)
+		// Detach Publish from every sim we attached to so a slow
+		// shutdown can't dispatch into a now-closed broker.
+		for _, s := range attachOn {
+			s.Observer = nil
+		}
+	}, nil
+}
+
+func buildMultimodal(spec, cacheDir string) (*sim.MultimodalOptions, *imagegen.Cache, error) {
+	if spec == "" || spec == "none" {
+		return nil, nil, nil
+	}
+	cache := imagegen.NewCache(resolveImageCacheDir(cacheDir))
+
+	switch {
+	case strings.HasPrefix(spec, "openaicompat:"):
+		baseURL, model, ok := strings.Cut(strings.TrimPrefix(spec, "openaicompat:"), "::")
+		if !ok || baseURL == "" || model == "" {
+			return nil, nil, fmt.Errorf("multimodal: openaicompat spec must be openaicompat:<base_url>::<model>, got %q", spec)
+		}
+		client, err := imageopenaicompat.New(imageopenaicompat.Options{
+			BaseURL: baseURL,
+			APIKey:  os.Getenv("OPENAI_API_KEY"), // optional
+			Model:   model,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("multimodal openaicompat: %w", err)
+		}
+		return &sim.MultimodalOptions{Generator: client, Cache: cache}, cache, nil
+	case spec == "openai" || strings.HasPrefix(spec, "openai:"):
+		model := ""
+		if rest, ok := strings.CutPrefix(spec, "openai:"); ok {
+			model = rest
+		}
+		apiKey := os.Getenv("OPENAI_API_KEY")
+		if apiKey == "" {
+			return nil, nil, errors.New("OPENAI_API_KEY required for --multimodal=openai")
+		}
+		client, err := imageopenai.New(imageopenai.Options{APIKey: apiKey, Model: model})
+		if err != nil {
+			return nil, nil, fmt.Errorf("multimodal openai: %w", err)
+		}
+		return &sim.MultimodalOptions{Generator: client, Cache: cache}, cache, nil
+	default:
+		return nil, nil, fmt.Errorf("unknown multimodal spec %q (try none | openai[:<model>] | openaicompat:<url>::<model>)", spec)
+	}
+}
+
+func resolveImageCacheDir(cacheDir string) string {
+	if cacheDir != "" {
+		return cacheDir
+	}
+	base, err := os.UserCacheDir()
+	if err != nil || base == "" {
+		base = filepath.Join(os.TempDir(), "fiatlux-cache")
+	}
+	return filepath.Join(base, "fiatlux", "images")
+}
+
+func chainObservers(a, b func(sim.StepResult)) func(sim.StepResult) {
+	if a == nil {
+		return b
+	}
+	if b == nil {
+		return a
+	}
+	return func(r sim.StepResult) {
+		a(r)
+		b(r)
+	}
+}
+
+func applyNarratorOverride(spec string, sims []*sim.Sim) error {
+	switch spec {
+	case "":
+		return nil
+	case "none":
+		for _, s := range sims {
+			s.SetNarrator(nil)
+		}
+		return nil
+	}
+	for _, s := range sims {
+		br, err := buildBrain(spec)
+		if err != nil {
+			return fmt.Errorf("brain %q: %w", spec, err)
+		}
+		n, err := narrator.New(narrator.Options{Brain: br})
+		if err != nil {
+			_ = br.Close()
+			return fmt.Errorf("narrator %q: %w", spec, err)
+		}
+		s.SetNarrator(n)
+	}
+	return nil
+}
+
+func buildSim(w *world.World, spec string, embedder memory.Embedder, importanceSpec string, reflectInterval uint64, maxAgents, maxSpawnDepth int) (*sim.Sim, error) {
+	br, err := buildBrain(spec)
+	if err != nil {
+		return nil, err
+	}
+	var importance memory.Importance
+	switch importanceSpec {
+	case "", "heuristic":
+		// Default - nil means memory.Add falls back to HeuristicScorer.
+	case "llm":
+		importance = memory.LLMScorer{Brain: br}
+	default:
+		return nil, fmt.Errorf("importance spec %q not recognised (try heuristic | llm)", importanceSpec)
+	}
+	factory := func(_ context.Context, childSpec string) (brain.Brain, error) {
+		return buildBrain(childSpec)
+	}
+	s, err := sim.New(sim.Options{
+		World:           w,
+		Brain:           br,
+		Tools:           tools.Default(),
+		Embedder:        embedder,
+		Importance:      importance,
+		ReflectInterval: reflectInterval,
+		BrainFactory:    factory,
+		MaxAgents:       maxAgents,
+		MaxSpawnDepth:   maxSpawnDepth,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("new sim: %w", err)
+	}
+	return s, nil
+}
+
+func buildEmbedder(spec string) (memory.Embedder, error) {
+	if spec == "" || spec == "zero" {
+		return memory.ZeroEmbedder{}, nil
+	}
+	if spec == "hash" {
+		return memory.HashEmbedder{Dim: 64}, nil
+	}
+	head, tail, _ := strings.Cut(spec, ":")
+	switch head {
+	case "ollama":
+		return memory.NewOllama(memory.OllamaOptions{Model: tail}), nil
+	case "openai":
+		key := os.Getenv("OPENAI_API_KEY")
+		if key == "" {
+			return nil, errors.New("embedder openai: OPENAI_API_KEY is required")
+		}
+		emb, err := memory.NewOpenAI(memory.OpenAIOptions{APIKey: key, Model: tail})
+		if err != nil {
+			return nil, fmt.Errorf("embedder openai: %w", err)
+		}
+		return emb, nil
+	}
+	return nil, fmt.Errorf("embedder spec %q not recognised", spec)
+}
+
+func buildBrain(spec string) (brain.Brain, error) {
+	if spec == "" {
+		spec = "stub"
+	}
+	head, tail, _ := strings.Cut(spec, ":")
+	switch head {
+	case "stub":
+		return buildStubBrain(tail)
+	case "anthropic":
+		return buildAnthropicBrain(tail)
+	case "openai":
+		return buildOpenAIBrain(tail)
+	case "ollama":
+		return buildOllamaBrain(tail)
+	case "openaicompat":
+		return buildOpenAICompatBrain(tail)
+	}
+	return nil, fmt.Errorf("brain spec %q not recognised; try 'fiatlux help'", spec)
+}
+
+func buildStubBrain(tail string) (brain.Brain, error) {
+	if tail == "" {
+		return stub.New(uint64(time.Now().UnixNano()), rand.Uint64(), tools.Default()), nil
+	}
+	seed, err := strconv.ParseUint(tail, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("brain stub seed %q: %w", tail, err)
+	}
+	return stub.New(seed, seed*0x9E3779B97F4A7C15, tools.Default()), nil
+}
+
+func buildAnthropicBrain(tail string) (brain.Brain, error) {
+	key := os.Getenv("ANTHROPIC_API_KEY")
+	if key == "" {
+		return nil, errors.New("brain anthropic: ANTHROPIC_API_KEY is required")
+	}
+	model := tail
+	if model == "" {
+		model = anthropic.DefaultModel
+	}
+	b, err := anthropic.New(anthropic.Options{
+		APIKey:       key,
+		Model:        model,
+		SystemPrompt: sim.DefaultSystemPrompt,
+		HTTPClient:   &http.Client{Timeout: 90 * time.Second},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("brain anthropic: %w", err)
+	}
+	return b, nil
+}
+
+func buildOpenAIBrain(tail string) (brain.Brain, error) {
+	key := os.Getenv("OPENAI_API_KEY")
+	if key == "" {
+		return nil, errors.New("brain openai: OPENAI_API_KEY is required")
+	}
+	model := tail
+	if model == "" {
+		model = openai.DefaultModel
+	}
+	b, err := openai.New(openai.Options{
+		APIKey:       key,
+		Model:        model,
+		SystemPrompt: sim.DefaultSystemPrompt,
+		HTTPClient:   &http.Client{Timeout: 90 * time.Second},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("brain openai: %w", err)
+	}
+	return b, nil
+}
+
+func buildOllamaBrain(tail string) (brain.Brain, error) {
+	model := tail
+	if model == "" {
+		model = ollama.DefaultModel
+	}
+	b, err := ollama.New(ollama.Options{
+		Model:        model,
+		SystemPrompt: sim.DefaultSystemPrompt,
+		HTTPClient:   &http.Client{Timeout: 5 * time.Minute},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("brain ollama: %w", err)
+	}
+	return b, nil
+}
+
+func buildOpenAICompatBrain(tail string) (brain.Brain, error) {
+	// Spec form: openaicompat:<base_url>::<model>. We split on the first "::"
+	// so URLs containing ":" (ports) parse cleanly.
+	base, model, ok := strings.Cut(tail, "::")
+	if !ok || base == "" || model == "" {
+		return nil, errors.New(`brain openaicompat: expected "openaicompat:<base_url>::<model>"`)
+	}
+	b, err := openaicompat.New(openaicompat.Options{
+		BaseURL:      base,
+		APIKey:       os.Getenv("FIATLUX_OPENAICOMPAT_KEY"),
+		Model:        model,
+		SystemPrompt: sim.DefaultSystemPrompt,
+		HTTPClient:   &http.Client{Timeout: 5 * time.Minute},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("brain openaicompat: %w", err)
+	}
+	return b, nil
+}
+
+type fullSaver struct {
+	store       *store.Store
+	simForWorld func(name string) *sim.Sim
+}
+
+func (f *fullSaver) Save(ctx context.Context, w *world.World) error {
+	if err := f.store.Save(ctx, w); err != nil {
+		return fmt.Errorf("save world: %w", err)
+	}
+	s := f.simForWorld(w.Name())
+	if s == nil {
+		return nil
+	}
+	root := s.Agent()
+	if root == nil || root.Memory == nil {
+		return nil
+	}
+	if err := f.store.SaveMemoryRecords(ctx, w.Name(), root.Memory.All()); err != nil {
+		return fmt.Errorf("save memory: %w", err)
+	}
+	return nil
+}
+
+func simByName(sims []*sim.Sim) func(string) *sim.Sim {
+	return func(name string) *sim.Sim {
+		for _, s := range sims {
+			if s.World != nil && s.World.Name() == name {
+				return s
+			}
+		}
+		return nil
+	}
+}
+
+func restoreRootMemory(ctx context.Context, dbStore *store.Store, s *sim.Sim) {
+	if s == nil || s.World == nil {
+		return
+	}
+	s.RestoreMacros(sim.MacrosFromEvents(s.World))
+	root := s.Agent()
+	if root == nil || root.Memory == nil {
+		return
+	}
+	records, err := dbStore.LoadMemoryRecords(ctx, s.World.Name())
+	if err != nil || len(records) == 0 {
+		return
+	}
+	root.Memory.Restore(records)
+}
+
+type simAdapter struct {
+	s       *sim.Sim
+	focusMu sync.Mutex
+	focusID uint64
+}
+
+func newSimAdapter(s *sim.Sim) *simAdapter {
+	a := &simAdapter{s: s}
+	if root := s.Agent(); root != nil {
+		a.focusID = uint64(root.EntityID)
+	}
+	return a
+}
+
+func (a *simAdapter) Step(ctx context.Context) (tui.StepSummary, error) {
+	res, err := a.s.Step(ctx)
+	if err != nil {
+		return tui.StepSummary{}, fmt.Errorf("step: %w", err)
+	}
+	return tui.StepSummary{
+		Tick:       uint64(res.Tick),
+		Skipped:    res.Skipped,
+		Thought:    res.Thought,
+		ToolName:   res.ToolName,
+		ToolResult: res.ToolResult,
+		ToolErr:    res.ToolErr,
+	}, nil
+}
+
+func (a *simAdapter) Annals() []tui.ChapterSummary {
+	chapters := a.s.Annals()
+	if len(chapters) == 0 {
+		return nil
+	}
+	out := make([]tui.ChapterSummary, len(chapters))
+	for i, c := range chapters {
+		out[i] = tui.ChapterSummary{Tick: c.Tick, Content: c.Content}
+	}
+	return out
+}
+
+func (a *simAdapter) Agents() []tui.AgentInfo {
+	roster := a.s.Agents()
+	out := make([]tui.AgentInfo, len(roster))
+	for i, ag := range roster {
+		out[i] = tui.AgentInfo{
+			ID:        uint64(ag.EntityID),
+			Name:      ag.Name,
+			IsCreator: ag.SpawnDepth == 0,
+			Drives:    ag.Drives.Clone(),
+			ParentID:  uint64(ag.ParentEntityID),
+			Dead:      a.s.IsDead(ag.EntityID),
+		}
+	}
+	return out
+}
+
+func (a *simAdapter) FocusedAgentID() uint64 {
+	a.focusMu.Lock()
+	defer a.focusMu.Unlock()
+	return a.focusID
+}
+
+func (a *simAdapter) SetFocusedAgentID(id uint64) {
+	a.focusMu.Lock()
+	a.focusID = id
+	a.focusMu.Unlock()
+}
+
+func (a *simAdapter) InterveneCreate(typeLabel string) (string, error) {
+	op := sim.Intervention{
+		Op:         sim.InterveneCreate,
+		TypeLabel:  typeLabel,
+		Properties: map[string]any{"origin": "void"},
+	}
+	if err := a.s.Intervene(context.Background(), op); err != nil {
+		return "", fmt.Errorf("intervene: %w", err)
+	}
+	return fmt.Sprintf("the void willed a %s into being", typeLabel), nil
+}
+
+func (a *simAdapter) InterveneDestroy(entityID uint64) (string, error) {
+	op := sim.Intervention{Op: sim.InterveneDestroy, EntityID: entityID}
+	if err := a.s.Intervene(context.Background(), op); err != nil {
+		return "", fmt.Errorf("intervene: %w", err)
+	}
+	return fmt.Sprintf("the void unmade #%d", entityID), nil
+}
+
+func (a *simAdapter) InterveneSpeak(content string) (string, error) {
+	op := sim.Intervention{Op: sim.InterveneSpeak, Content: content}
+	if err := a.s.Intervene(context.Background(), op); err != nil {
+		return "", fmt.Errorf("intervene: %w", err)
+	}
+	return "the void whispered to every agent", nil
+}
+
+func (a *simAdapter) MemorySnapshot() tui.MemorySnapshot {
+	a.focusMu.Lock()
+	focused := a.focusID
+	a.focusMu.Unlock()
+
+	roster := a.s.Agents()
+	if len(roster) == 0 {
+		return tui.MemorySnapshot{}
+	}
+	ag := roster[0]
+	for _, x := range roster {
+		if uint64(x.EntityID) == focused {
+			ag = x
+			break
+		}
+	}
+	if ag.Memory == nil {
+		return tui.MemorySnapshot{AgentName: ag.Name}
+	}
+	recs := ag.Memory.All()
+	out := make([]tui.MemoryRecord, len(recs))
+	for i, r := range recs {
+		out[i] = tui.MemoryRecord{
+			ID:         uint64(r.ID),
+			Kind:       string(r.Kind),
+			Content:    r.Content,
+			Tick:       uint64(r.CreatedAt),
+			Importance: r.Importance,
+		}
+	}
+	return tui.MemorySnapshot{AgentName: ag.Name, Records: out}
+}
+
+type universeAdapter struct {
+	u            *sim.Universe
+	focusMu      sync.Mutex
+	focusByWorld map[int]uint64
+}
+
+func newUniverseAdapter(u *sim.Universe) *universeAdapter {
+	a := &universeAdapter{u: u, focusByWorld: make(map[int]uint64)}
+	for i, s := range u.Sims() {
+		if root := s.Agent(); root != nil {
+			a.focusByWorld[i] = uint64(root.EntityID)
+		}
+	}
+	return a
+}
+
+func (a *universeAdapter) Step(ctx context.Context) (tui.StepSummary, error) {
+	res, err := a.u.Step(ctx)
+	if err != nil {
+		return tui.StepSummary{}, fmt.Errorf("step: %w", err)
+	}
+	return tui.StepSummary{
+		Tick:       uint64(res.Tick),
+		Skipped:    res.Skipped,
+		Thought:    res.Thought,
+		ToolName:   res.ToolName,
+		ToolResult: res.ToolResult,
+		ToolErr:    res.ToolErr,
+	}, nil
+}
+
+func (a *universeAdapter) FocusedWorld() *world.World {
+	return a.u.Focused().World
+}
+
+func (a *universeAdapter) Worlds() []tui.WorldInfo {
+	src := a.u.Worlds()
+	out := make([]tui.WorldInfo, len(src))
+	for i, w := range src {
+		out[i] = tui.WorldInfo{
+			Index: w.Index, Name: w.Name,
+			Tick: uint64(w.Tick), EntityCount: w.EntityCount, AgentCount: w.AgentCount,
+		}
+	}
+	return out
+}
+
+func (a *universeAdapter) FocusedWorldIdx() int        { return a.u.FocusedIdx() }
+func (a *universeAdapter) SetFocusedWorldIdx(i int)    { a.u.SetFocusedIdx(i) }
+func (a *universeAdapter) CycleFocusedWorld(delta int) { a.u.CycleFocus(delta) }
+
+func (a *universeAdapter) Annals() []tui.ChapterSummary {
+	chapters := a.u.Focused().Annals()
+	if len(chapters) == 0 {
+		return nil
+	}
+	out := make([]tui.ChapterSummary, len(chapters))
+	for i, c := range chapters {
+		out[i] = tui.ChapterSummary{Tick: c.Tick, Content: c.Content}
+	}
+	return out
+}
+
+func (a *universeAdapter) Agents() []tui.AgentInfo {
+	focused := a.u.Focused()
+	roster := focused.Agents()
+	out := make([]tui.AgentInfo, len(roster))
+	for i, ag := range roster {
+		out[i] = tui.AgentInfo{
+			ID:        uint64(ag.EntityID),
+			Name:      ag.Name,
+			IsCreator: ag.SpawnDepth == 0,
+			Drives:    ag.Drives.Clone(),
+			ParentID:  uint64(ag.ParentEntityID),
+			Dead:      focused.IsDead(ag.EntityID),
+		}
+	}
+	return out
+}
+
+func (a *universeAdapter) FocusedAgentID() uint64 {
+	a.focusMu.Lock()
+	defer a.focusMu.Unlock()
+	return a.focusByWorld[a.u.FocusedIdx()]
+}
+
+func (a *universeAdapter) SetFocusedAgentID(id uint64) {
+	a.focusMu.Lock()
+	a.focusByWorld[a.u.FocusedIdx()] = id
+	a.focusMu.Unlock()
+}
+
+func (a *universeAdapter) InterveneCreate(typeLabel string) (string, error) {
+	op := sim.Intervention{
+		Op:         sim.InterveneCreate,
+		TypeLabel:  typeLabel,
+		Properties: map[string]any{"origin": "void"},
+	}
+	if err := a.u.Focused().Intervene(context.Background(), op); err != nil {
+		return "", fmt.Errorf("intervene: %w", err)
+	}
+	return fmt.Sprintf("the void willed a %s into being", typeLabel), nil
+}
+
+func (a *universeAdapter) InterveneDestroy(entityID uint64) (string, error) {
+	op := sim.Intervention{Op: sim.InterveneDestroy, EntityID: entityID}
+	if err := a.u.Focused().Intervene(context.Background(), op); err != nil {
+		return "", fmt.Errorf("intervene: %w", err)
+	}
+	return fmt.Sprintf("the void unmade #%d", entityID), nil
+}
+
+func (a *universeAdapter) InterveneSpeak(content string) (string, error) {
+	op := sim.Intervention{Op: sim.InterveneSpeak, Content: content}
+	if err := a.u.Focused().Intervene(context.Background(), op); err != nil {
+		return "", fmt.Errorf("intervene: %w", err)
+	}
+	return "the void whispered to every agent", nil
+}
+
+func (a *universeAdapter) MemorySnapshot() tui.MemorySnapshot {
+	focused := a.FocusedAgentID()
+	roster := a.u.Focused().Agents()
+	if len(roster) == 0 {
+		return tui.MemorySnapshot{}
+	}
+	ag := roster[0]
+	for _, x := range roster {
+		if uint64(x.EntityID) == focused {
+			ag = x
+			break
+		}
+	}
+	if ag.Memory == nil {
+		return tui.MemorySnapshot{AgentName: ag.Name}
+	}
+	recs := ag.Memory.All()
+	out := make([]tui.MemoryRecord, len(recs))
+	for i, r := range recs {
+		out[i] = tui.MemoryRecord{
+			ID:         uint64(r.ID),
+			Kind:       string(r.Kind),
+			Content:    r.Content,
+			Tick:       uint64(r.CreatedAt),
+			Importance: r.Importance,
+		}
+	}
+	return tui.MemorySnapshot{AgentName: ag.Name, Records: out}
+}
+
+func loadUniverse(ctx context.Context, path string, embedder memory.Embedder, st tui.Storer) (*sim.Universe, *sim.Config, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open config: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	cfg, err := sim.LoadYAML(f)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load config: %w", err)
+	}
+	factory := func(_ context.Context, spec string) (brain.Brain, error) {
+		return buildBrain(spec)
+	}
+	loader := storeWorldLoader(st)
+	u, err := cfg.BuildUniverse(ctx, factory, embedder, loader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build universe: %w", err)
+	}
+	return u, cfg, nil
+}
+
+func storeWorldLoader(st tui.Storer) sim.WorldLoader {
+	type worldLoader interface {
+		Load(ctx context.Context, name string) (*world.World, error)
+	}
+	wl, ok := st.(worldLoader)
+	if !ok || wl == nil {
+		return nil
+	}
+	return func(ctx context.Context, name string) (*world.World, error) {
+		w, err := wl.Load(ctx, name)
+		if err == nil {
+			return w, nil
+		}
+		if errors.Is(err, store.ErrWorldNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("load world: %w", err)
+	}
+}
+
+func cmdReplay(stdout, stderr io.Writer) *cobra.Command {
+	_ = stderr
+	cmd := &cobra.Command{
+		Use:          "replay",
+		Short:        "Replay a saved world tick by tick",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+	}
+	f := cmd.Flags()
+	dbPath := f.String("db", "", "database DSN (required; accepts local files and libsql URLs)")
+	worldName := f.String("world", "kosmos", "name of the world to replay")
+	replayTick := f.Duration("replay-tick", 100*time.Millisecond, "delay between replayed events")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if *dbPath == "" {
+			return errors.New("replay: --db is required")
+		}
+
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+
+		st, err := store.Open(ctx, *dbPath)
+		if err != nil {
+			return fmt.Errorf("open store: %w", err)
+		}
+		defer func() { _ = st.Close() }()
+
+		loaded, err := st.Load(ctx, *worldName)
+		if err != nil {
+			return fmt.Errorf("load world: %w", err)
+		}
+		events := loaded.Events()
+		if len(events) == 0 {
+			_, _ = fmt.Fprintln(stdout, "(world has no events to replay)")
+			return nil
+		}
+
+		rp, err := sim.NewReplay(*worldName, events)
+		if err != nil {
+			return fmt.Errorf("new replay: %w", err)
+		}
+		stepper := replayAdapter{r: rp}
+
+		if err := tui.Run(ctx, tui.RunOptions{
+			World:        rp.World,
+			Sim:          stepper,
+			TickInterval: *replayTick,
+			Output:       stdout,
+		}); err != nil {
+			return fmt.Errorf("run tui: %w", err)
+		}
+		return nil
+	}
+	return cmd
+}
+
+type stepSummary struct {
+	World              string         `json:"world"`
+	Ticks              uint64         `json:"ticks"`
+	Steps              int            `json:"steps"`
+	StepsSkipped       int            `json:"steps_skipped"`
+	EntitiesAlive      int            `json:"entities_alive"`
+	RelationshipsAlive int            `json:"relationships_alive"`
+	Agents             int            `json:"agents"`
+	Events             int            `json:"events"`
+	ToolErrors         int            `json:"tool_errors"`
+	ToolCounts         map[string]int `json:"tool_counts"`
+	ElapsedMS          int64          `json:"elapsed_ms"`
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+func openStore(ctx context.Context, dbPath string) (tui.Storer, func(), error) {
+	if dbPath == "" {
+		return nil, func() {}, nil
+	}
+	s, err := store.Open(ctx, dbPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open store: %w", err)
+	}
+	return s, func() { _ = s.Close() }, nil
+}
+
+func runSteps(ctx context.Context, s stepper, count int, tickDelay time.Duration) (stepSummary, error) {
+	summary := stepSummary{ToolCounts: map[string]int{}}
+	start := time.Now()
+	for i := 0; i < count; i++ {
+		if ctx.Err() != nil {
+			break
+		}
+		res, err := s.Step(ctx)
+		if err != nil {
+			return summary, fmt.Errorf("step %d: %w", i, err)
+		}
+		summary.Steps++
+		if res.Skipped {
+			summary.StepsSkipped++
+		}
+		if res.ToolName != "" {
+			summary.ToolCounts[res.ToolName]++
+		}
+		if res.ToolErr != nil {
+			summary.ToolErrors++
+		}
+		if tickDelay > 0 && i+1 < count {
+			select {
+			case <-ctx.Done():
+			case <-time.After(tickDelay):
+			}
+		}
+	}
+	summary.ElapsedMS = time.Since(start).Milliseconds()
+	return summary, nil //nolint:nilerr // res.ToolErr is tallied in the summary, not propagated
+}
+
+type serveComponents struct {
+	world        *world.World
+	loop         stepper
+	simProvider  webui.SimProvider
+	attachOnSims []*sim.Sim
+	simForWorld  func(name string) *sim.Sim
+	yamlWebAddr  string
+	yamlSaveMode string
+	cleanup      func()
+}
+
+func buildServeComponents(ctx context.Context, w *world.World, st tui.Storer, o runComponentOpts) (*serveComponents, error) {
+	switch {
+	case o.configPath != "":
+		return buildServeUniverse(ctx, st, o)
+	case o.brainSpec != "none":
+		return buildServeSim(ctx, w, st, o)
+	default:
+		return nil, errors.New("serve: --brain=none is not supported (web viewer needs a sim to render)")
+	}
+}
+
+func buildServeUniverse(ctx context.Context, st tui.Storer, o runComponentOpts) (*serveComponents, error) {
+	embedder, err := buildEmbedder(o.embedderSpec)
+	if err != nil {
+		return nil, fmt.Errorf("build embedder: %w", err)
+	}
+	u, cfg, err := loadUniverse(ctx, o.configPath, embedder, st)
+	if err != nil {
+		return nil, err
+	}
+	if dbStore, ok := st.(*store.Store); ok {
+		for _, s := range u.Sims() {
+			restoreRootMemory(ctx, dbStore, s)
+		}
+	}
+	sc := &serveComponents{
+		world:        u.Focused().World,
+		loop:         u,
+		simProvider:  func() *sim.Sim { return u.Focused() },
+		attachOnSims: u.Sims(),
+		simForWorld:  simByName(u.Sims()),
+		cleanup:      func() { _ = u.Close() },
+	}
+	if cfg != nil {
+		sc.yamlWebAddr = cfg.Web.Addr
+		sc.yamlSaveMode = cfg.Save.Mode
+	}
+	return sc, nil
+}
+
+func buildServeSim(ctx context.Context, w *world.World, st tui.Storer, o runComponentOpts) (*serveComponents, error) {
+	embedder, err := buildEmbedder(o.embedderSpec)
+	if err != nil {
+		return nil, fmt.Errorf("build embedder: %w", err)
+	}
+	s, err := buildSim(w, o.brainSpec, embedder, o.importance, o.reflect, o.maxAgents, o.maxSpawnDepth)
+	if err != nil {
+		return nil, fmt.Errorf("build sim: %w", err)
+	}
+	if dbStore, ok := st.(*store.Store); ok {
+		restoreRootMemory(ctx, dbStore, s)
+	}
+	return &serveComponents{
+		world:        w,
+		loop:         s,
+		simProvider:  func() *sim.Sim { return s },
+		attachOnSims: []*sim.Sim{s},
+		simForWorld:  simByName([]*sim.Sim{s}),
+		cleanup:      func() { _ = s.Close() },
+	}, nil
+}
+
+func serveLoop(ctx context.Context, loop stepper, st tui.Storer, w *world.World, tickInterval time.Duration, stderr io.Writer) {
+	ticker := time.NewTicker(tickInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			finalSave(st, w, stderr)
+			return
+		case <-ticker.C:
+			if _, err := loop.Step(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				_, _ = fmt.Fprintln(stderr, "step:", err)
+			}
+		}
+	}
+}
+
+func finalSave(st tui.Storer, w *world.World, stderr io.Writer) {
+	if st == nil {
+		return
+	}
+	saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := st.Save(saveCtx, w); err != nil {
+		_, _ = fmt.Fprintln(stderr, "final save:", err)
+	}
+}
+
+func cmdStep(stdout, stderr io.Writer) *cobra.Command {
+	_ = stderr
+	cmd := &cobra.Command{
+		Use:          "step",
+		Short:        "Run the sim headlessly for N steps and print a summary",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+	}
+	f := cmd.Flags()
+	count := f.Int("count", 1, "number of Step calls to perform")
+	worldName := f.String("world", "kosmos", "name of the world to open or create")
+	dbPath := f.String("db", "", "database DSN (empty = in-memory)")
+	brainSpec := f.String("brain", "stub", "brain config; see 'fiatlux help'")
+	tickDelay := f.Duration("tick", 0, "delay between steps (default: no delay)")
+	embedderSpec := f.String("embedder", "zero", "memory embedder")
+	importanceSpec := f.String("importance", "heuristic", "memory importance scorer")
+	reflectInterval := f.Uint64("reflect-interval", 0, "ticks between reflection passes (0 = disable)")
+	maxAgents := f.Int("max-agents", 8, "cap on total agents per world")
+	maxSpawnDepth := f.Int("max-spawn-depth", 3, "cap on the spawn graph height")
+	jsonOut := f.Bool("json", false, "emit summary as JSON instead of human-readable text")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		return runStep(stdout, stepFlags{
+			count: *count, worldName: *worldName, dbPath: *dbPath, brainSpec: *brainSpec,
+			tickDelay: *tickDelay, embedderSpec: *embedderSpec, importanceSpec: *importanceSpec,
+			reflectInterval: *reflectInterval, maxAgents: *maxAgents, maxSpawnDepth: *maxSpawnDepth,
+			jsonOut: *jsonOut,
+		})
+	}
+	return cmd
+}
+
+type stepFlags struct {
+	count                        int
+	worldName, dbPath, brainSpec string
+	tickDelay                    time.Duration
+	embedderSpec, importanceSpec string
+	reflectInterval              uint64
+	maxAgents, maxSpawnDepth     int
+	jsonOut                      bool
+}
+
+func runStep(stdout io.Writer, fl stepFlags) error {
+	if fl.count <= 0 {
+		return fmt.Errorf("step: --count must be > 0 (got %d)", fl.count)
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	st, closeStore, err := openStore(ctx, fl.dbPath)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+
+	w, err := loadOrNewWorld(ctx, st, fl.worldName)
+	if err != nil {
+		return err
+	}
+
+	embedder, err := buildEmbedder(fl.embedderSpec)
+	if err != nil {
+		return fmt.Errorf("build embedder: %w", err)
+	}
+	s, err := buildSim(w, fl.brainSpec, embedder, fl.importanceSpec, fl.reflectInterval, fl.maxAgents, fl.maxSpawnDepth)
+	if err != nil {
+		return fmt.Errorf("build sim: %w", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	// Restore root-agent memory from prior runs (if any) and wrap
+	// the store with the full-saver so the final save persists
+	// memory too.
+	if dbStore, ok := st.(*store.Store); ok {
+		restoreRootMemory(ctx, dbStore, s)
+		st = &fullSaver{store: dbStore, simForWorld: simByName([]*sim.Sim{s})}
+	}
+
+	summary, err := runSteps(ctx, s, fl.count, fl.tickDelay)
+	if err != nil {
+		return err
+	}
+	summary.Ticks = uint64(w.Tick())
+	summary.EntitiesAlive = w.EntityCount()
+	summary.RelationshipsAlive = w.RelationshipCount()
+	summary.Agents = len(s.Agents())
+	summary.Events = len(w.Events())
+	summary.World = w.Name()
+
+	// Save before reporting if a store is attached - users running
+	// headless probably want their work persisted.
+	if st != nil {
+		if err := st.Save(ctx, w); err != nil {
+			return fmt.Errorf("save: %w", err)
+		}
+	}
+
+	if fl.jsonOut {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(summary); err != nil {
+			return fmt.Errorf("encode summary: %w", err)
+		}
+		return nil
+	}
+	writeHumanSummary(stdout, summary)
+	return nil
+}
+
+type stepper interface {
+	Step(ctx context.Context) (sim.StepResult, error)
+}
+
+func cmdServe(stdout, stderr io.Writer) *cobra.Command {
+	_ = stdout
+	cmd := &cobra.Command{
+		Use:          "serve",
+		Short:        "Run the sim headlessly with the embedded web viewer attached",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+	}
+	f := cmd.Flags()
+	worldName := f.String("world", "kosmos", "name of the world to open or create")
+	dbPath := f.String("db", "", "database DSN (empty = in-memory, no persistence)")
+	brainSpec := f.String("brain", "stub", "brain config; see 'fiatlux help'")
+	tickInterval := f.Duration("tick", tui.DefaultTickInterval, "sim tick interval")
+	embedderSpec := f.String("embedder", "zero", "memory embedder (zero | hash | ollama[:model] | openai[:model])")
+	importanceSpec := f.String("importance", "heuristic", "memory importance scorer (heuristic | llm)")
+	reflectInterval := f.Uint64("reflect-interval", 20, "ticks between reflection passes (0 = disable)")
+	maxAgents := f.Int("max-agents", 8, "cap on total agents per world")
+	maxSpawnDepth := f.Int("max-spawn-depth", 3, "cap on the spawn graph height")
+	configPath := f.String("config", "", "YAML config for a multi-world universe (overrides --brain)")
+	webAddr := f.String("web-addr", ":8080", "address to bind the embedded web viewer (e.g. :8080 or 127.0.0.1:8080)")
+	saveMode := f.String("save-mode", "", "persistence cadence: manual | interval:<duration> (e.g. interval:30s)")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+
+		st, closeStore, err := openStore(ctx, *dbPath)
+		if err != nil {
+			return err
+		}
+		defer closeStore()
+
+		w, err := loadOrNewWorld(ctx, st, *worldName)
+		if err != nil {
+			return err
+		}
+
+		sc, err := buildServeComponents(ctx, w, st, runComponentOpts{
+			embedderSpec:  *embedderSpec,
+			configPath:    *configPath,
+			brainSpec:     *brainSpec,
+			importance:    *importanceSpec,
+			reflect:       *reflectInterval,
+			maxAgents:     *maxAgents,
+			maxSpawnDepth: *maxSpawnDepth,
+		})
+		if err != nil {
+			return err
+		}
+		defer sc.cleanup()
+		w = sc.world
+
+		if dbStore, ok := st.(*store.Store); ok && sc.simForWorld != nil {
+			st = &fullSaver{store: dbStore, simForWorld: sc.simForWorld}
+		}
+
+		resolvedWebAddr := *webAddr
+		if resolvedWebAddr == "" {
+			resolvedWebAddr = sc.yamlWebAddr
+		}
+		if resolvedWebAddr == "" {
+			return errors.New("serve: --web-addr is required (set the flag or YAML 'web.addr')")
+		}
+		stop, err := startWebUI(resolvedWebAddr, sc.simProvider, sc.attachOnSims, nil, stderr)
+		if err != nil {
+			return err
+		}
+		defer stop()
+
+		resolvedSaveMode := *saveMode
+		if resolvedSaveMode == "" {
+			resolvedSaveMode = sc.yamlSaveMode
+		}
+		if err := startAutosave(ctx, st, w, resolvedSaveMode, stderr); err != nil {
+			return err
+		}
+
+		serveLoop(ctx, sc.loop, st, w, *tickInterval, stderr)
+		return nil
+	}
+	return cmd
+}
+
+func writeHumanSummary(w io.Writer, s stepSummary) {
+	lines := []string{
+		fmt.Sprintf("world:                %s", s.World),
+		fmt.Sprintf("ticks:                %d", s.Ticks),
+		fmt.Sprintf("steps:                %d", s.Steps),
+		fmt.Sprintf("steps_skipped:        %d", s.StepsSkipped),
+		fmt.Sprintf("entities_alive:       %d", s.EntitiesAlive),
+		fmt.Sprintf("relationships_alive:  %d", s.RelationshipsAlive),
+		fmt.Sprintf("agents:               %d", s.Agents),
+		fmt.Sprintf("events:               %d", s.Events),
+		fmt.Sprintf("tool_errors:          %d", s.ToolErrors),
+		fmt.Sprintf("elapsed_ms:           %d", s.ElapsedMS),
+	}
+	if len(s.ToolCounts) > 0 {
+		lines = append(lines, "tool_counts:")
+		names := make([]string, 0, len(s.ToolCounts))
+		for n := range s.ToolCounts {
+			names = append(names, n)
+		}
+		slices.Sort(names)
+		for _, n := range names {
+			lines = append(lines, fmt.Sprintf("  %-16s %d", n+":", s.ToolCounts[n]))
+		}
+	}
+	_, _ = fmt.Fprintln(w, strings.Join(lines, "\n"))
+}
+
+type replayAdapter struct{ r *sim.Replay }
+
+func (a replayAdapter) Step(ctx context.Context) (tui.StepSummary, error) {
+	res, err := a.r.Step(ctx)
+	if errors.Is(err, sim.ErrReplayDone) {
+		// Treat completion as a skipped step so the TUI keeps
+		// rendering the final frame without erroring.
+		return tui.StepSummary{
+			Tick: uint64(res.Tick), Skipped: true,
+			ToolResult: "replay complete",
+		}, nil
+	}
+	if err != nil {
+		return tui.StepSummary{}, fmt.Errorf("step: %w", err)
+	}
+	return tui.StepSummary{
+		Tick:       uint64(res.Tick),
+		Thought:    res.Thought,
+		ToolName:   res.ToolName,
+		ToolResult: res.ToolResult,
+	}, nil
+}
+
+func (a replayAdapter) FocusedWorld() *world.World { return a.r.World }
+
+func loadOrNewWorld(ctx context.Context, st tui.Storer, name string) (*world.World, error) {
+	if loader, ok := st.(interface {
+		Load(ctx context.Context, name string) (*world.World, error)
+	}); ok {
+		w, err := loader.Load(ctx, name)
+		if err == nil {
+			return w, nil
+		}
+		if !errors.Is(err, store.ErrWorldNotFound) {
+			return nil, fmt.Errorf("load world: %w", err)
+		}
+	}
+	w, err := world.New(name)
+	if err != nil {
+		return nil, fmt.Errorf("new world: %w", err)
+	}
+	return w, nil
+}

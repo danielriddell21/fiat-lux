@@ -92,8 +92,6 @@ func TestStep_RepeatedRunsFillTheWorld(t *testing.T) {
 	}
 }
 
-// fixedBrain returns a pre-set decision regardless of input. Useful
-// to drive specific step outcomes in tests.
 type fixedBrain struct {
 	decisions []brain.Decision
 	idx       int
@@ -195,8 +193,6 @@ func TestStep_SkipsWhenNothingHappened(t *testing.T) {
 	}
 }
 
-// memoryInspectingBrain captures the Perception the sim passed in
-// so we can assert what memories were threaded through.
 type memoryInspectingBrain struct {
 	seen brain.Perception
 }
@@ -239,9 +235,6 @@ func TestStep_RecordsAndInjectsMemories(t *testing.T) {
 	}
 }
 
-// reflectingBrain returns a fixed action tool call on the first
-// N calls and a multi-line reflection thought afterwards. The
-// reflection pass uses Decide with empty tools and reads .Thought.
 type reflectingBrain struct {
 	createCalls int
 }
@@ -305,8 +298,6 @@ func TestStep_ReflectsOnInterval(t *testing.T) {
 	}
 }
 
-// scriptedBrain returns decisions from a queue, looping when
-// exhausted. Records the last perception it received.
 type scriptedBrain struct {
 	decisions []brain.Decision
 	idx       int

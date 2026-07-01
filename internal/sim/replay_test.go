@@ -8,8 +8,6 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// captureEvents builds a sample world, performs a few operations,
-// and returns the resulting event log.
 func captureEvents(t *testing.T) []world.Event {
 	t.Helper()
 	w, _ := world.New("kosmos")

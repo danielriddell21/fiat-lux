@@ -7,34 +7,17 @@ import (
 	"errors"
 	"fmt"
 
-	_ "modernc.org/sqlite" // registers the "sqlite" SQL driver
+	_ "modernc.org/sqlite"
 
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// ErrWorldNotFound is returned by Load when no world with the given
-// name exists in the database.
 var ErrWorldNotFound = errors.New("store: world not found")
 
-// Store persists worlds to a SQLite-compatible database. It is
-// event-sourced: a world's full state is reconstructed by replaying
-// its events through world.ApplyEventForLoad. The same code path
-// drives both local SQLite (modernc.org/sqlite) and remote libSQL
-// (Turso / self-hosted sqld) - the DSN scheme picks the driver.
 type Store struct {
 	db *sql.DB
 }
 
-// Open opens (or creates) a database at the given DSN and applies
-// the schema. Accepted forms:
-//
-//	./kosmos.db, /abs/path.db   - local SQLite file
-//	:memory:                     - local in-memory SQLite
-//	file:./foo.db?_journal=WAL   - SQLite file URI
-//	sqlite://./foo.db            - explicit sqlite scheme
-//	libsql://<host>?authToken=.. - remote libSQL (Turso etc.)
-//	http(s)://<host>:<port>      - self-hosted sqld
-//	ws(s)://<host>:<port>        - self-hosted sqld over websocket
 func Open(ctx context.Context, dsn string) (*Store, error) {
 	driver, dsn, err := resolveDSN(dsn)
 	if err != nil {
@@ -51,18 +34,18 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-// Close releases the underlying database handle.
 func (s *Store) Close() error {
 	if s.db == nil {
 		return nil
 	}
 	err := s.db.Close()
 	s.db = nil
-	return err
+	if err != nil {
+		return fmt.Errorf("store: close db: %w", err)
+	}
+	return nil
 }
 
-// Save writes the world's name, tick, and full event log to the
-// database. Existing events for this world are replaced atomically.
 func (s *Store) Save(ctx context.Context, w *world.World) error {
 	if w == nil {
 		return errors.New("store: cannot save nil world")
@@ -130,9 +113,6 @@ func (s *Store) Save(ctx context.Context, w *world.World) error {
 	return nil
 }
 
-// Load reconstructs the world with the given name by replaying its
-// event log into a fresh World. Returns ErrWorldNotFound if no such
-// world exists.
 func (s *Store) Load(ctx context.Context, name string) (*world.World, error) {
 	var worldID int64
 	if err := s.db.QueryRowContext(ctx, `SELECT id FROM worlds WHERE name = ?`, name).
@@ -203,8 +183,6 @@ func (s *Store) Load(ctx context.Context, name string) (*world.World, error) {
 	return w, nil
 }
 
-// ListWorlds returns the names of every world in the store, in
-// ascending order.
 func (s *Store) ListWorlds(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT name FROM worlds ORDER BY name ASC`)
 	if err != nil {
@@ -220,7 +198,10 @@ func (s *Store) ListWorlds(ctx context.Context) ([]string, error) {
 		}
 		out = append(out, n)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate world names: %w", err)
+	}
+	return out, nil
 }
 
 func marshalProps(p world.Properties) (string, error) {
@@ -229,7 +210,7 @@ func marshalProps(p world.Properties) (string, error) {
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("store: marshal props: %w", err)
 	}
 	return string(b), nil
 }
@@ -240,7 +221,7 @@ func unmarshalProps(s string) (world.Properties, error) {
 	}
 	var p world.Properties
 	if err := json.Unmarshal([]byte(s), &p); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("store: unmarshal props: %w", err)
 	}
 	return p, nil
 }

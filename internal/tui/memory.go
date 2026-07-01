@@ -5,9 +5,6 @@ import (
 	"strings"
 )
 
-// MemoryRecord is the TUI's minimal projection of memory.Record.
-// Keeps internal/tui independent of internal/memory so its tests
-// stay self-contained; cmd/fiatlux maps between them.
 type MemoryRecord struct {
 	ID         uint64
 	Kind       string
@@ -16,22 +13,15 @@ type MemoryRecord struct {
 	Importance float64
 }
 
-// MemorySnapshot is the agent-state slice the inspector renders.
 type MemorySnapshot struct {
 	AgentName string
 	Records   []MemoryRecord
 }
 
-// MemorySource is the read interface the TUI uses to populate the
-// memory inspector overlay. The sim adapter in cmd/fiatlux
-// satisfies it.
 type MemorySource interface {
 	MemorySnapshot() MemorySnapshot
 }
 
-// RenderMemoryOverlay renders the full memory list. It is shown when
-// the user presses 'm'. The most recently inserted records appear
-// first.
 func RenderMemoryOverlay(snap MemorySnapshot, s Styles) string {
 	var b strings.Builder
 	title := "memory stream"

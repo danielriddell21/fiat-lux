@@ -2,8 +2,6 @@ package tui
 
 import lg "charm.land/lipgloss/v2"
 
-// Styles is the visual theme. It is constructed once per session and
-// passed by value into renderers.
 type Styles struct {
 	StatusBar   lg.Style
 	StatusKey   lg.Style
@@ -33,8 +31,6 @@ type Styles struct {
 	Faint lg.Style
 }
 
-// DefaultStyles returns the canonical theme. It uses 256-colour
-// palette codes so it renders consistently across terminals.
 func DefaultStyles() Styles {
 	subtle := lg.Color("241")
 	highlight := lg.Color("212")

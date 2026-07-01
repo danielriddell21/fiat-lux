@@ -7,9 +7,6 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// MacrosFromEvents replays EventDefineTool entries out of the world's
-// event log into a fresh macro Set. Validation is deferred to the
-// receiving sim - this function only handles the JSON shape.
 func MacrosFromEvents(w *world.World) *macros.Set {
 	if w == nil {
 		return nil

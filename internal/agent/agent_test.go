@@ -101,9 +101,6 @@ func TestRecentEvents_FiltersBySeenWatermark(t *testing.T) {
 	}
 }
 
-// hierarchy builds a "contains" tree to exercise the frontier and
-// focus computations. Returns the root planet, the continent, the
-// two forest leaves, and the world it created them in.
 func hierarchy(t *testing.T) (*world.World, *Agent, world.EntityID, world.EntityID, world.EntityID, world.EntityID) {
 	t.Helper()
 	w, _ := world.New("kosmos")

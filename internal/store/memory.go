@@ -1,22 +1,17 @@
 package store
 
 import (
+	"cmp"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/danielriddell21/fiat-lux/internal/memory"
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// SaveMemoryRecords replaces the saved memory rows for a given
-// world atomically. The world name is the durable key (entity IDs
-// are remade on each sim load, so they can't anchor cross-session
-// continuity). Embeddings are intentionally not persisted: they're
-// recomputable and would invalidate on any embedder swap.
 func (s *Store) SaveMemoryRecords(ctx context.Context, worldName string, records []memory.Record) error {
 	if worldName == "" {
 		return errors.New("store: SaveMemoryRecords needs a non-empty world name")
@@ -63,10 +58,6 @@ func (s *Store) SaveMemoryRecords(ctx context.Context, worldName string, records
 	return nil
 }
 
-// LoadMemoryRecords returns every saved memory record for the
-// given world, ordered by (agent_id, id) for deterministic restore.
-// Embedding is empty; callers that want relevance scoring should
-// recompute embeddings on the restored stream.
 func (s *Store) LoadMemoryRecords(ctx context.Context, worldName string) ([]memory.Record, error) {
 	if worldName == "" {
 		return nil, errors.New("store: LoadMemoryRecords needs a non-empty world name")
@@ -116,22 +107,15 @@ func (s *Store) LoadMemoryRecords(ctx context.Context, worldName string) ([]memo
 	return out, nil
 }
 
-// MemoryRecordsByAgent groups loaded records by AgentID. The
-// returned slices stay in the (id ASC) order LoadMemoryRecords
-// returned. Useful when wiring records back into per-agent streams.
 func MemoryRecordsByAgent(records []memory.Record) map[world.AgentID][]memory.Record {
 	out := make(map[world.AgentID][]memory.Record)
 	for _, r := range records {
 		out[r.AgentID] = append(out[r.AgentID], r)
 	}
 	for k := range out {
-		sort.SliceStable(out[k], func(i, j int) bool {
-			return out[k][i].ID < out[k][j].ID
+		slices.SortStableFunc(out[k], func(a, b memory.Record) int {
+			return cmp.Compare(a.ID, b.ID)
 		})
 	}
 	return out
 }
-
-// Compile-time assertion: *Store satisfies the parts of the API the
-// autosave loop needs.
-var _ = (*sql.DB)(nil) // keep database/sql import stable across edits

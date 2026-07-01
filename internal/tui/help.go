@@ -5,7 +5,6 @@ import (
 	"strings"
 )
 
-// helpEntry is one row in the help overlay / footer.
 type helpEntry struct {
 	keys string
 	desc string
@@ -31,8 +30,6 @@ func helpEntries() []helpEntry {
 	}
 }
 
-// RenderHelpFooter is the one-line key strip shown at the bottom of
-// the screen when the overlay is off.
 func RenderHelpFooter(s Styles) string {
 	parts := []string{
 		key("q", "quit", s),
@@ -54,8 +51,6 @@ func key(k, label string, s Styles) string {
 	)
 }
 
-// RenderHelpOverlay is the full keybinding list shown when the user
-// toggles `?`.
 func RenderHelpOverlay(s Styles) string {
 	var b strings.Builder
 	b.WriteString(s.PaneTitle.Render("fiat-lux key bindings"))

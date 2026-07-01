@@ -9,11 +9,8 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// recentEventsCap bounds /api/state's RecentEvents tail; the SSE
-// stream is the source of truth for live updates.
 const recentEventsCap = 50
 
-// StateResponse is the snapshot returned by GET /api/state.
 type StateResponse struct {
 	World         string               `json:"world"`
 	Tick          uint64               `json:"tick"`
@@ -23,7 +20,6 @@ type StateResponse struct {
 	RecentEvents  []world.Event        `json:"recent_events"`
 }
 
-// AgentSummary is a light projection of agent.Agent for the side rail.
 type AgentSummary struct {
 	ID         uint64             `json:"id"`
 	Name       string             `json:"name"`
@@ -34,7 +30,6 @@ type AgentSummary struct {
 	Dead       bool               `json:"dead,omitempty"`
 }
 
-// StepEvent is the payload pushed over SSE on every Sim.Step.
 type StepEvent struct {
 	Tick       uint64 `json:"tick"`
 	AgentID    uint64 `json:"agent_id,omitempty"`
@@ -146,9 +141,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleImage serves bytes from the multimodal image cache at
-// /api/image/<hash>.png. The hash is whatever imagegen.Hash produced
-// for the prompt when the image was written.
 func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 	if s.imageCache == nil {
 		http.Error(w, "image cache not configured", http.StatusNotFound)
@@ -174,7 +166,7 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	_, _ = w.Write(data)
+	_, _ = w.Write(data) //nolint:gosec // cached PNG bytes served with an image/png content-type, not HTML
 }
 
 func errString(err error) string {
@@ -184,8 +176,6 @@ func errString(err error) string {
 	return err.Error()
 }
 
-// handleIntervene applies a sandbox intervention to the currently
-// focused world. POST only; body is sim.Intervention as JSON.
 func (s *Server) handleIntervene(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -209,8 +199,6 @@ func (s *Server) handleIntervene(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-// handleAnnals returns the narrator's chapter log for the currently
-// focused world. The response is JSON: { "chapters": [...] }.
 func (s *Server) handleAnnals(w http.ResponseWriter, r *http.Request) {
 	sm := s.provider()
 	if sm == nil {

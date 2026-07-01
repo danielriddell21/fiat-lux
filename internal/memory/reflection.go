@@ -9,49 +9,23 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// ReflectionSystemPrompt is the canonical instruction Smallville
-// (Park et al. 2023) sends to its reflection brain, adapted to the
-// fiat-lux agent. The agent is asked to synthesise a small number
-// of higher-level insights from the most recent raw memories.
 const ReflectionSystemPrompt = `You are an agent reflecting on what you have observed and done. ` +
 	`Below are your recent memories. Synthesise at most three brief, high-level insights about what is happening - ` +
 	`the patterns, surprises, or implications that a low-level memory stream misses. ` +
 	`Output one insight per line, prefixed with "- ", and nothing else. Be concise.`
 
-// Reflector runs the periodic reflection pass: every Interval ticks
-// it gathers the most recent raw memories, asks a brain to synthesise
-// higher-level insights, and writes them back as KindReflection
-// records.
-//
-// Reflection runs on the agent's own brain; multi-brain routing
-// can be added later.
 type Reflector struct {
-	// Brain is the LLM used for synthesis. Required.
 	Brain brain.Brain
 
-	// Interval is the tick gap between reflection passes. Zero
-	// disables the pass.
 	Interval uint64
 
-	// Lookback is how many of the most recent memories to feed the
-	// reflection brain. Defaults to 20.
 	Lookback int
 
-	// MaxInsights caps the number of reflection records emitted per
-	// pass. Defaults to 3.
 	MaxInsights int
 
-	// MinRawMemories is the minimum number of non-reflection records
-	// required before a pass will fire. Below this the pass is a
-	// no-op; reflecting on nothing yields nothing useful and just
-	// costs tokens. Defaults to 5.
 	MinRawMemories int
 }
 
-// ShouldReflect reports whether a reflection pass is due at the
-// given tick. Reflection fires when the tick is a non-zero multiple
-// of the interval. Callers must also check the stream's content
-// against MinRawMemories before invoking Reflect.
 func (r *Reflector) ShouldReflect(tick world.Tick) bool {
 	if r == nil || r.Interval == 0 {
 		return false
@@ -62,14 +36,6 @@ func (r *Reflector) ShouldReflect(tick world.Tick) bool {
 	return uint64(tick)%r.Interval == 0
 }
 
-// Reflect runs one reflection pass. It pulls the most recent raw
-// (non-reflection) memories from the stream, asks the brain to
-// synthesise insights, and appends the insights back into the
-// stream as KindReflection records.
-//
-// Returns the inserted records (empty when nothing new was
-// synthesised) and the token usage reported by the brain so the
-// budget tracker can record it.
 func (r *Reflector) Reflect(
 	ctx context.Context,
 	stream *Stream,
@@ -133,9 +99,6 @@ func (r *Reflector) Reflect(
 	return out, decision.Usage, nil
 }
 
-// lastRawMemories returns up to n of the most recent
-// non-reflection records, oldest-first within the returned slice
-// so the brain reads them chronologically.
 func lastRawMemories(all []Record, n int) []Record {
 	filtered := make([]Record, 0, n)
 	// Walk backward and collect raw records up to n.
@@ -152,10 +115,6 @@ func lastRawMemories(all []Record, n int) []Record {
 	return filtered
 }
 
-// parseInsights extracts up to maxN insight lines from the brain's
-// freeform text. Accepted formats: "- insight", "* insight",
-// "1. insight", "1) insight", or plain lines. Empty lines are
-// dropped.
 func parseInsights(text string, maxN int) []string {
 	var out []string
 	for _, raw := range strings.Split(text, "\n") {

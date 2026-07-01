@@ -7,9 +7,6 @@ import (
 	"github.com/danielriddell21/fiat-lux/internal/world"
 )
 
-// RenderEventLog renders the last n events as one line each. If
-// events is empty a styled placeholder is returned. n <= 0 means
-// "render all".
 func RenderEventLog(events []world.Event, n int, s Styles) string {
 	if len(events) == 0 {
 		return s.Faint.Render("(no events yet)")
