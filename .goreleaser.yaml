@@ -48,7 +48,7 @@ changelog:
 dockers:
   - goos: linux
     goarch: amd64
-    ids: [unum]
+    ids: [fiatlux]
     dockerfile: Dockerfile
     image_templates:
       - "ghcr.io/danielriddell21/fiat-lux:{{ .Tag }}"
