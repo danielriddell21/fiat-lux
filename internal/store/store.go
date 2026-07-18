@@ -27,6 +27,14 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: open (%s): %w", driver, err)
 	}
+	// sqld (the libSQL server) rejects PRAGMA journal_mode over its remote
+	// protocols, so WAL is only requested for local sqlite connections.
+	if driver == driverSQLite {
+		if _, err := db.ExecContext(ctx, walPragma); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("store: apply wal pragma: %w", err)
+		}
+	}
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: apply schema (%s): %w", driver, err)

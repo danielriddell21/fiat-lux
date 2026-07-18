@@ -66,6 +66,19 @@ func TestOpen_AppliesSchema(t *testing.T) {
 	}
 }
 
+func TestOpen_EnablesWALForFileSQLite(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "kosmos.db")
+	s := mustOpen(t, path)
+	var mode string
+	if err := s.db.QueryRowContext(context.Background(), "PRAGMA journal_mode").Scan(&mode); err != nil {
+		t.Fatalf("PRAGMA journal_mode: %v", err)
+	}
+	if mode != "wal" {
+		t.Errorf("journal_mode = %q, want wal", mode)
+	}
+}
+
 func TestSaveLoad_RoundTrip(t *testing.T) {
 	t.Parallel()
 	s := mustOpen(t, ":memory:")

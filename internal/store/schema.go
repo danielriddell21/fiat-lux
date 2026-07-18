@@ -1,8 +1,9 @@
 package store
 
+const walPragma = `PRAGMA journal_mode = WAL;`
+
 const schema = `
 PRAGMA foreign_keys = ON;
-PRAGMA journal_mode = WAL;
 
 CREATE TABLE IF NOT EXISTS worlds (
     id   INTEGER PRIMARY KEY AUTOINCREMENT,
