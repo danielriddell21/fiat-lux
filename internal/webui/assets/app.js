@@ -42,9 +42,6 @@
           selector: "node",
           style: {
             "background-color": "data(color)",
-            "background-image": "data(image)",
-            "background-fit": "cover",
-            "background-image-opacity": 1,
             "label": "data(label)",
             "color": "#e6edf3",
             "font-size": 11,
@@ -56,6 +53,14 @@
             "height": "data(size)",
             "border-color": "#30363d",
             "border-width": 1,
+          },
+        },
+        {
+          selector: "node.has-image",
+          style: {
+            "background-image": "data(image)",
+            "background-fit": "cover",
+            "background-image-opacity": 1,
           },
         },
         {
@@ -125,7 +130,7 @@
       return {
         group: "nodes",
         data: { id: String(e.id), label, color: colorForType(e.type), size, type: e.type, image },
-        classes: [isAgent ? "agent" : "", e.destroyed_at ? "destroyed" : ""].filter(Boolean).join(" "),
+        classes: [isAgent ? "agent" : "", e.destroyed_at ? "destroyed" : "", image ? "has-image" : ""].filter(Boolean).join(" "),
       };
     });
 
