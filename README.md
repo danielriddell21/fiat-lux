@@ -1,6 +1,6 @@
 # fiat-lux
 
-> *Let there be light.*
+> *fiat lux* — let there be light.
 
 [![CI](https://github.com/danielriddell21/fiat-lux/actions/workflows/ci.yaml/badge.svg)](https://github.com/danielriddell21/fiat-lux/actions/workflows/ci.yaml)
 [![codecov](https://codecov.io/gh/danielriddell21/fiat-lux/graph/badge.svg)](https://codecov.io/gh/danielriddell21/fiat-lux)
