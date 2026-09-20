@@ -40,6 +40,11 @@ jobs:
       # No docker/login-action, QEMU or Buildx: letsgo assembles the multi-arch
       # image from the binaries it just built and pushes it over the registry
       # API, so there is no daemon to authenticate.
+      # The letsgo version is pinned rather than left to the action's default:
+      # letsgo decides the archive layout and the linker flags, so it is a
+      # build input, and a release built by a version nobody chose is a
+      # release nobody can reproduce.
       - uses: danielriddell21/letsgo-action@v1
         with:
+          version: v0.5.0
           token: ${{ steps.token.outputs.token }}
