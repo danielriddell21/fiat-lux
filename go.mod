@@ -3,7 +3,7 @@ module github.com/danielriddell21/fiat-lux
 go 1.27.1
 
 require (
-	charm.land/bubbletea/v2 v2.0.9
+	charm.land/bubbletea/v2 v2.0.10
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/spf13/cobra v1.10.2
 	github.com/tursodatabase/libsql-client-go v0.0.0-20260514053736-a9a8fadfe885
