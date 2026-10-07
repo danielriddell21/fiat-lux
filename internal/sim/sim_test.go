@@ -1,11 +1,11 @@
 package sim
 
 import (
-	"math"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/danielriddell21/fiat-lux/internal/brain"
