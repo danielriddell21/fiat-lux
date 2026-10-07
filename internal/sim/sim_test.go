@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/danielriddell21/fiat-lux/internal/brain"
@@ -703,8 +704,7 @@ func TestDrives_RootValidatesNaN(t *testing.T) {
 }
 
 func nan() float64 {
-	var z float64
-	return z / z
+	return math.NaN()
 }
 
 func TestDefineTool_RegistersAndAppearsInDefs(t *testing.T) {
