@@ -21,6 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/danielriddell21/fiat-lux/internal/agent"
 	"github.com/danielriddell21/fiat-lux/internal/brain"
 	"github.com/danielriddell21/fiat-lux/internal/brain/anthropic"
 	"github.com/danielriddell21/fiat-lux/internal/brain/ollama"
@@ -508,7 +509,12 @@ func resolveImageCacheDir(cacheDir string) string {
 	}
 	base, err := os.UserCacheDir()
 	if err != nil || base == "" {
-		base = filepath.Join(os.TempDir(), "fiatlux-cache")
+		// A fixed name under the shared temp directory could be created first
+		// by another user; a fresh private directory cannot.
+		base, err = os.MkdirTemp("", "fiatlux-cache-")
+		if err != nil {
+			base = ".fiatlux-cache"
+		}
 	}
 	return filepath.Join(base, "fiatlux", "images")
 }
@@ -871,32 +877,7 @@ func (a *simAdapter) MemorySnapshot() tui.MemorySnapshot {
 	focused := a.focusID
 	a.focusMu.Unlock()
 
-	roster := a.s.Agents()
-	if len(roster) == 0 {
-		return tui.MemorySnapshot{}
-	}
-	ag := roster[0]
-	for _, x := range roster {
-		if uint64(x.EntityID) == focused {
-			ag = x
-			break
-		}
-	}
-	if ag.Memory == nil {
-		return tui.MemorySnapshot{AgentName: ag.Name}
-	}
-	recs := ag.Memory.All()
-	out := make([]tui.MemoryRecord, len(recs))
-	for i, r := range recs {
-		out[i] = tui.MemoryRecord{
-			ID:         uint64(r.ID),
-			Kind:       string(r.Kind),
-			Content:    r.Content,
-			Tick:       uint64(r.CreatedAt),
-			Importance: r.Importance,
-		}
-	}
-	return tui.MemorySnapshot{AgentName: ag.Name, Records: out}
+	return memorySnapshot(a.s.Agents(), focused)
 }
 
 type universeAdapter struct {
@@ -1021,7 +1002,12 @@ func (a *universeAdapter) InterveneSpeak(content string) (string, error) {
 
 func (a *universeAdapter) MemorySnapshot() tui.MemorySnapshot {
 	focused := a.FocusedAgentID()
-	roster := a.u.Focused().Agents()
+	return memorySnapshot(a.u.Focused().Agents(), focused)
+}
+
+// memorySnapshot is the focused agent's memory, or the first agent's when the
+// focused one has left the roster.
+func memorySnapshot(roster []*agent.Agent, focused uint64) tui.MemorySnapshot {
 	if len(roster) == 0 {
 		return tui.MemorySnapshot{}
 	}

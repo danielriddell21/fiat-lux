@@ -1,6 +1,7 @@
 package sim
 
 import (
+	"math"
 	"context"
 	"encoding/json"
 	"errors"
@@ -703,8 +704,7 @@ func TestDrives_RootValidatesNaN(t *testing.T) {
 }
 
 func nan() float64 {
-	var z float64
-	return z / z
+	return math.NaN()
 }
 
 func TestDefineTool_RegistersAndAppearsInDefs(t *testing.T) {
