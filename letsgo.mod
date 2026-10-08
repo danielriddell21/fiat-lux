@@ -31,7 +31,3 @@ image base gcr.io/distroless/static-debian12@sha256:afa5c872c891853ca7fcf1f12c3e
 // and the port the image listens on is undocumented.
 image cmd serve
 image expose 8080
-
-// Releases were marked as pre-releases by the shared workflow after the fact;
-// letsgo does it as part of publishing, so promotion is still a manual step.
-release prerelease=true
