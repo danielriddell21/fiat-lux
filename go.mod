@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	charm.land/bubbletea/v2 v2.0.10
-	charm.land/lipgloss/v2 v2.0.6
+	charm.land/lipgloss/v2 v2.1.1
 	github.com/spf13/cobra v1.10.2
 	github.com/tursodatabase/libsql-client-go v0.0.0-20260514053736-a9a8fadfe885
 	gopkg.in/yaml.v3 v3.0.1
